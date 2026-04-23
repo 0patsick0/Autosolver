@@ -29,6 +29,7 @@ uv run autosolver replay examples/events/research.jsonl --output dashboard/publi
 uv run autosolver smoke examples/smoke_run
 powershell -ExecutionPolicy Bypass -File scripts/full_check.ps1
 powershell -ExecutionPolicy Bypass -File scripts/live_dashboard.ps1
+uv run autosolver-web
 start_live_dashboard.cmd
 ```
 
@@ -82,10 +83,13 @@ When official input and output formats arrive, only the adapter and submission w
 - `generate` creates synthetic canonical instances plus a ready-to-use benchmark manifest for local search and regression tests.
 - `research --resume` keeps history, seen configurations, and LLM reflection notes in a state file so the agent can continue exploring instead of restarting.
 - `research --dashboard-output dashboard/public/replay-data.json` now updates the dashboard replay artifact while the agent is still running, so the web UI can follow the process live.
+- `autosolver-web` starts a local control API on `http://127.0.0.1:8765`, so the dashboard can directly trigger `pytest`, `smoke`, `research`, `benchmark`, and `solve` from the browser.
 - `solve --config-source path/to/research_summary.json` reuses the incumbent solver configuration discovered by the agent on prior research runs.
 - `smoke output_dir` generates a synthetic benchmark, solves one case, validates it, runs research, re-solves with the incumbent config, and writes replay data in one command.
 - `scripts/full_check.ps1` runs pytest, the end-to-end smoke flow, research-to-solve deployment validation, and a production dashboard build.
-- `scripts/live_dashboard.ps1` starts the Vite dashboard, opens the browser, and launches a live research run that streams replay updates into `dashboard/public/replay-data.json`.
+- `scripts/live_dashboard.ps1` now starts both the Vite dashboard and the local control API. Add `-AutoRunResearch` only when you want it to immediately kick off a live research run.
 - `start_live_dashboard.cmd` is the one-click Windows launcher. You can double-click it from Explorer or run it from the repo root.
+- After the page opens, use the "网页控制台" panel to start `pytest`, `smoke`, `research`, `benchmark`, or `solve` directly from the browser and inspect the produced artifacts without leaving the dashboard.
+- The control panel also includes one-click presets for demo research, cloud probe research, sample solve, and quick smoke runs so new teammates can start a useful workflow without filling paths by hand.
 - `.github/workflows/deploy-dashboard.yml` builds the Vite dashboard and deploys it to GitHub Pages on every push to `main`.
 - The hosted site falls back to `dashboard/public/demo-replay.json` when no live `replay-data.json` exists, so the cloud dashboard always has a replay to show.

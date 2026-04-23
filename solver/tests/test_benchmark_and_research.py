@@ -20,6 +20,7 @@ from autosolver_agent.research import (
     _heuristic_reflection,
     _judge,
     _parameter_value_insights,
+    _search_memory_digest,
     _summarize_benchmark_cases,
 )
 
@@ -74,6 +75,37 @@ class DuplicateProposalProvider(LLMProvider):
                 "max_generated_bundles": 16,
                 "lns_destroy_fraction": 0.15,
                 "lns_iterations": 8,
+            },
+        }
+
+
+class CaptureProposalProvider(LLMProvider):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.last_payload: dict[str, object] | None = None
+
+    def is_configured(self) -> bool:
+        return True
+
+    def complete_json(self, system_prompt: str, user_prompt: str) -> dict[str, object]:
+        del system_prompt
+        self.last_payload = json.loads(user_prompt)
+        return {
+            "experiment_id": "captured-exp",
+            "name": "captured-exp",
+            "hypothesis": "Use stable values but expand an unexplored bundle knob.",
+            "solver_config": {
+                "top_k_riders_per_order": 2,
+                "use_cpsat": True,
+                "generate_bundles_if_missing": True,
+                "bundle_candidate_pool_size": 8,
+                "max_bundle_size": 3,
+                "bundle_distance_threshold": 2.5,
+                "bundle_discount_factor": 0.92,
+                "bundle_acceptance_scale": 0.93,
+                "max_generated_bundles": 32,
+                "lns_destroy_fraction": 0.2,
+                "lns_iterations": 12,
             },
         }
 
@@ -338,6 +370,140 @@ class TestBenchmarkAndResearch:
         assert insights["top_k_riders_per_order"][0]["value"] == 2
         assert insights["use_cpsat"][0]["value"] is True
 
+    def test_search_memory_digest_surfaces_regime_risks_and_gaps(self):
+        keep_config = SolveConfig(
+            time_budget_ms=400,
+            top_k_riders_per_order=2,
+            use_cpsat=True,
+            generate_bundles_if_missing=True,
+            bundle_candidate_pool_size=6,
+            max_bundle_size=3,
+        )
+        discard_config = SolveConfig(
+            time_budget_ms=400,
+            top_k_riders_per_order=1,
+            use_cpsat=False,
+            generate_bundles_if_missing=False,
+            bundle_candidate_pool_size=4,
+            max_bundle_size=2,
+        )
+        history = [
+            ExperimentRecord(
+                experiment_id="keep-1",
+                status="keep",
+                hypothesis="good",
+                benchmark_summary=BenchmarkSummary(
+                    benchmark_id="demo",
+                    case_metrics=(),
+                    average_expected_completed_orders=3.0,
+                    average_total_cost=10.0,
+                    total_elapsed_ms=10,
+                ),
+                started_at="2026-01-01T00:00:00+00:00",
+                finished_at="2026-01-01T00:00:01+00:00",
+                solver_config=keep_config,
+            ),
+            ExperimentRecord(
+                experiment_id="discard-1",
+                status="discard",
+                hypothesis="bad",
+                benchmark_summary=BenchmarkSummary(
+                    benchmark_id="demo",
+                    case_metrics=(),
+                    average_expected_completed_orders=2.0,
+                    average_total_cost=12.0,
+                    total_elapsed_ms=12,
+                ),
+                started_at="2026-01-01T00:00:02+00:00",
+                finished_at="2026-01-01T00:00:03+00:00",
+                solver_config=discard_config,
+            ),
+            ExperimentRecord(
+                experiment_id="discard-2",
+                status="discard",
+                hypothesis="bad-again",
+                benchmark_summary=BenchmarkSummary(
+                    benchmark_id="demo",
+                    case_metrics=(),
+                    average_expected_completed_orders=2.1,
+                    average_total_cost=12.5,
+                    total_elapsed_ms=13,
+                ),
+                started_at="2026-01-01T00:00:04+00:00",
+                finished_at="2026-01-01T00:00:05+00:00",
+                solver_config=discard_config,
+            ),
+        ]
+
+        digest = _search_memory_digest(
+            ResearchMemory(history=history),
+            {
+                "top_k_riders_per_order": [1, 2, 3],
+                "use_cpsat": [True, False],
+                "generate_bundles_if_missing": [True, False],
+                "bundle_candidate_pool_size": [4, 6, 8],
+                "max_bundle_size": [2, 3],
+                "bundle_distance_threshold": [2.0, 2.5, 3.0],
+                "bundle_discount_factor": [0.88, 0.92, 0.96],
+                "bundle_acceptance_scale": [0.88, 0.93, 0.97],
+                "max_generated_bundles": [16, 32, 64],
+                "lns_destroy_fraction": [0.15, 0.2, 0.25, 0.3],
+                "lns_iterations": [8, 12, 16, 24],
+            },
+            {
+                "case_count": 4,
+                "avg_orders": 48.0,
+                "avg_riders": 14.0,
+                "orders_per_rider": 3.4,
+                "avg_bundle_candidates": 0.0,
+                "avg_match_density": 0.62,
+                "weighted_cases": [],
+            },
+        )
+
+        assert "rider_constrained" in digest["regime_tags"]
+        assert "bundle_sparse" in digest["regime_tags"]
+        assert any(row["key"] == "top_k_riders_per_order" for row in digest["stable_values"])
+        assert any(row["key"] == "top_k_riders_per_order" for row in digest["risky_values"])
+        assert any(row["key"] == "top_k_riders_per_order" for row in digest["exploration_gaps"])
+
+    def test_llm_proposer_receives_strategy_memory_context(self):
+        provider = CaptureProposalProvider(base_url="https://example.com", api_key="demo", model="test-model")
+        proposer = LLMExperimentProposer(
+            provider=provider,
+            search_space={
+                "top_k_riders_per_order": [1, 2, 3],
+                "use_cpsat": [True, False],
+                "generate_bundles_if_missing": [True, False],
+                "bundle_candidate_pool_size": [4, 6, 8],
+                "max_bundle_size": [2, 3],
+                "bundle_distance_threshold": [2.0, 2.5, 3.0],
+                "bundle_discount_factor": [0.88, 0.92, 0.96],
+                "bundle_acceptance_scale": [0.88, 0.93, 0.97],
+                "max_generated_bundles": [16, 32, 64],
+                "lns_destroy_fraction": [0.15, 0.2, 0.25, 0.3],
+                "lns_iterations": [8, 12, 16, 24],
+            },
+            benchmark_profile={
+                "case_count": 4,
+                "avg_orders": 48.0,
+                "avg_riders": 14.0,
+                "orders_per_rider": 3.4,
+                "avg_bundle_candidates": 0.0,
+                "avg_match_density": 0.62,
+                "weighted_cases": [],
+            },
+        )
+
+        proposer.propose(ResearchMemory(), "demo", 400, 0)
+
+        assert provider.last_payload is not None
+        assert "strategy_memory" in provider.last_payload
+        strategy_memory = provider.last_payload["strategy_memory"]
+        assert isinstance(strategy_memory, dict)
+        assert "regime_tags" in strategy_memory
+        assert "exploration_gaps" in strategy_memory
+
     def test_heuristic_reflection_explains_regression_against_incumbent(self):
         record = ExperimentRecord(
             experiment_id="exp-2",
@@ -501,6 +667,90 @@ class TestBenchmarkAndResearch:
 
         assert proposal.notes.startswith("llm-proposer:")
         assert json.dumps(proposal.solver_config.__dict__, sort_keys=True) not in memory.seen_signatures
+        assert proposal.solver_config.generate_bundles_if_missing is True
+        assert proposal.solver_config.top_k_riders_per_order >= 2
+
+    def test_rule_based_proposer_avoids_dominant_bad_values(self):
+        weak_config = SolveConfig(
+            time_budget_ms=400,
+            top_k_riders_per_order=1,
+            use_cpsat=False,
+            generate_bundles_if_missing=False,
+            bundle_candidate_pool_size=4,
+            max_bundle_size=2,
+        )
+        history = [
+            ExperimentRecord(
+                experiment_id="discard-1",
+                status="discard",
+                hypothesis="weak",
+                benchmark_summary=BenchmarkSummary(
+                    benchmark_id="demo",
+                    case_metrics=(),
+                    average_expected_completed_orders=2.0,
+                    average_total_cost=12.0,
+                    total_elapsed_ms=22,
+                ),
+                started_at="2026-01-01T00:00:02+00:00",
+                finished_at="2026-01-01T00:00:03+00:00",
+                solver_config=weak_config,
+                config_signature=json.dumps(weak_config.__dict__, sort_keys=True),
+            ),
+            ExperimentRecord(
+                experiment_id="discard-2",
+                status="discard",
+                hypothesis="weak-again",
+                benchmark_summary=BenchmarkSummary(
+                    benchmark_id="demo",
+                    case_metrics=(),
+                    average_expected_completed_orders=2.1,
+                    average_total_cost=12.5,
+                    total_elapsed_ms=24,
+                ),
+                started_at="2026-01-01T00:00:04+00:00",
+                finished_at="2026-01-01T00:00:05+00:00",
+                solver_config=weak_config,
+                config_signature=json.dumps(weak_config.__dict__, sort_keys=True),
+            ),
+        ]
+        proposer = RuleBasedProposer(
+            seed=17,
+            search_space={
+                "top_k_riders_per_order": [1, 2, 3],
+                "use_cpsat": [True, False],
+                "generate_bundles_if_missing": [True, False],
+                "bundle_candidate_pool_size": [4, 6, 8],
+                "max_bundle_size": [2, 3],
+                "bundle_distance_threshold": [2.0, 2.5, 3.0],
+                "bundle_discount_factor": [0.88, 0.92, 0.96],
+                "bundle_acceptance_scale": [0.88, 0.93, 0.97],
+                "max_generated_bundles": [16, 32, 64],
+                "lns_destroy_fraction": [0.15, 0.2, 0.25, 0.3],
+                "lns_iterations": [8, 12, 16, 24],
+            },
+            benchmark_profile={
+                "case_count": 4,
+                "avg_orders": 48.0,
+                "avg_riders": 14.0,
+                "orders_per_rider": 3.4,
+                "avg_bundle_candidates": 0.0,
+                "avg_match_density": 0.62,
+                "weighted_cases": [],
+            },
+        )
+
+        proposal = proposer.propose(
+            ResearchMemory(
+                seen_signatures={json.dumps(weak_config.__dict__, sort_keys=True)},
+                failed_signatures={json.dumps(weak_config.__dict__, sort_keys=True)},
+                history=history,
+            ),
+            "demo",
+            400,
+            0,
+        )
+
+        assert proposal.solver_config.use_cpsat is True
         assert proposal.solver_config.generate_bundles_if_missing is True
         assert proposal.solver_config.top_k_riders_per_order >= 2
 

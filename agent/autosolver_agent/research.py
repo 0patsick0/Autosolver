@@ -71,9 +71,11 @@ class RuleBasedProposer:
         self.benchmark_profile = benchmark_profile or {}
 
     def propose(self, memory: ResearchMemory, benchmark_id: str, time_budget_ms: int, round_index: int) -> ExperimentSpec:
+        strategy_memory = _search_memory_digest(memory, self.search_space, self.benchmark_profile)
         prioritized_keys = _prioritized_search_keys(memory, self.benchmark_profile)
         base_config = _base_solver_config(memory, time_budget_ms)
         preferred_values = _preferred_value_orders(memory.history, self.search_space)
+        blocked_values = _blocked_value_orders(memory.history, self.search_space)
         solver_config = base_config
 
         for attempt in range(48):
@@ -82,6 +84,7 @@ class RuleBasedProposer:
                 search_space=self.search_space,
                 prioritized_keys=prioritized_keys,
                 preferred_values=preferred_values,
+                blocked_values=blocked_values,
                 memory=memory,
                 round_index=round_index,
                 attempt=attempt,
@@ -94,18 +97,34 @@ class RuleBasedProposer:
                 offset = round_index + attempt
                 solver_config = SolveConfig(
                     time_budget_ms=time_budget_ms,
-                    top_k_riders_per_order=int(_pick(self.search_space, "top_k_riders_per_order", offset, 3)),
-                    use_cpsat=bool(_pick(self.search_space, "use_cpsat", offset, True)),
+                    top_k_riders_per_order=int(
+                        _pick_unblocked(self.search_space, "top_k_riders_per_order", offset, 3, blocked_values)
+                    ),
+                    use_cpsat=bool(_pick_unblocked(self.search_space, "use_cpsat", offset, True, blocked_values)),
                     use_lns=True,
-                    generate_bundles_if_missing=bool(_pick(self.search_space, "generate_bundles_if_missing", offset, True)),
-                    bundle_candidate_pool_size=int(_pick(self.search_space, "bundle_candidate_pool_size", offset, 6)),
-                    max_bundle_size=int(_pick(self.search_space, "max_bundle_size", offset, 3)),
-                    bundle_distance_threshold=float(_pick(self.search_space, "bundle_distance_threshold", offset, 2.5)),
-                    bundle_discount_factor=float(_pick(self.search_space, "bundle_discount_factor", offset, 0.92)),
-                    bundle_acceptance_scale=float(_pick(self.search_space, "bundle_acceptance_scale", offset, 0.95)),
-                    max_generated_bundles=int(_pick(self.search_space, "max_generated_bundles", offset, 64)),
-                    lns_destroy_fraction=float(_pick(self.search_space, "lns_destroy_fraction", offset, 0.25)),
-                    lns_iterations=int(_pick(self.search_space, "lns_iterations", offset, 24)),
+                    generate_bundles_if_missing=bool(
+                        _pick_unblocked(self.search_space, "generate_bundles_if_missing", offset, True, blocked_values)
+                    ),
+                    bundle_candidate_pool_size=int(
+                        _pick_unblocked(self.search_space, "bundle_candidate_pool_size", offset, 6, blocked_values)
+                    ),
+                    max_bundle_size=int(_pick_unblocked(self.search_space, "max_bundle_size", offset, 3, blocked_values)),
+                    bundle_distance_threshold=float(
+                        _pick_unblocked(self.search_space, "bundle_distance_threshold", offset, 2.5, blocked_values)
+                    ),
+                    bundle_discount_factor=float(
+                        _pick_unblocked(self.search_space, "bundle_discount_factor", offset, 0.92, blocked_values)
+                    ),
+                    bundle_acceptance_scale=float(
+                        _pick_unblocked(self.search_space, "bundle_acceptance_scale", offset, 0.95, blocked_values)
+                    ),
+                    max_generated_bundles=int(
+                        _pick_unblocked(self.search_space, "max_generated_bundles", offset, 64, blocked_values)
+                    ),
+                    lns_destroy_fraction=float(
+                        _pick_unblocked(self.search_space, "lns_destroy_fraction", offset, 0.25, blocked_values)
+                    ),
+                    lns_iterations=int(_pick_unblocked(self.search_space, "lns_iterations", offset, 24, blocked_values)),
                 )
                 if _config_signature(solver_config) not in memory.seen_signatures:
                     break
@@ -114,7 +133,8 @@ class RuleBasedProposer:
             name=f"rule-based-{round_index + 1}",
             hypothesis=(
                 "Adjust top_k, bundle generation, and local search neighborhood "
-                f"for benchmark {benchmark_id} with config {_config_signature(solver_config)}."
+                f"for benchmark {benchmark_id} under regimes {strategy_memory['regime_tags']} "
+                f"with config {_config_signature(solver_config)}."
             ),
             solver_config=solver_config,
             benchmark_ids=(benchmark_id,),
@@ -130,6 +150,7 @@ class LLMExperimentProposer:
         self.system_prompt = Path(__file__).with_name("prompts").joinpath("research_system.md").read_text(encoding="utf-8")
 
     def propose(self, memory: ResearchMemory, benchmark_id: str, time_budget_ms: int, round_index: int) -> ExperimentSpec:
+        strategy_memory = _search_memory_digest(memory, self.search_space, self.benchmark_profile)
         prioritized_keys = _prioritized_search_keys(memory, self.benchmark_profile)
         base_config = _base_solver_config(memory, time_budget_ms)
         history = [
@@ -147,6 +168,7 @@ class LLMExperimentProposer:
         incumbent_record = _best_record(memory.history)
         parameter_insights = _parameter_value_insights(memory.history, self.search_space)
         preferred_values = _preferred_value_orders(memory.history, self.search_space)
+        blocked_values = _blocked_value_orders(memory.history, self.search_space)
         response = self.provider.complete_json(
             self.system_prompt,
             json.dumps(
@@ -160,6 +182,7 @@ class LLMExperimentProposer:
                         "priority_knobs": prioritized_keys[:6],
                     },
                     "parameter_insights": parameter_insights,
+                    "strategy_memory": strategy_memory,
                     "incumbent": _record_to_payload(incumbent_record),
                     "history": history,
                     "lessons": memory.lessons[-5:],
@@ -204,6 +227,7 @@ class LLMExperimentProposer:
             search_space=self.search_space,
             prioritized_keys=prioritized_keys,
             preferred_values=preferred_values,
+            blocked_values=blocked_values,
             memory=memory,
             round_index=round_index,
             benchmark_profile=self.benchmark_profile,
@@ -461,6 +485,7 @@ class ResearchRunner:
             "benchmark_metadata": benchmark_metadata,
             "benchmark_profile": benchmark_profile,
             "search_space": search_space,
+            "strategy_memory": _search_memory_digest(memory, search_space, benchmark_profile),
             "state_path": str(resolved_state_path),
             "agent": {
                 "llm_enabled": bool(self.provider and self.provider.is_configured()),
@@ -603,6 +628,22 @@ def _pick(search_space: dict[str, list[object]], key: str, offset: int, default:
     if not allowed:
         return default
     return allowed[offset % len(allowed)]
+
+
+def _pick_unblocked(
+    search_space: dict[str, list[object]],
+    key: str,
+    offset: int,
+    default: object,
+    blocked_values: dict[str, list[object]],
+) -> object:
+    allowed = search_space.get(key, [])
+    if not allowed:
+        return default
+    candidates = [value for value in allowed if value not in blocked_values.get(key, [])]
+    if not candidates:
+        candidates = allowed
+    return candidates[offset % len(candidates)]
 
 
 def _coerce_allowed(value: Any, allowed: list[object], default: object) -> object:
@@ -794,7 +835,7 @@ def _parse_dict_like_text(snippet: str) -> dict[str, object] | None:
 
 def _base_solver_config(memory: ResearchMemory, time_budget_ms: int) -> SolveConfig:
     incumbent_record = _best_record(memory.history)
-    if incumbent_record is not None and incumbent_record.solver_config is not None:
+    if incumbent_record is not None and incumbent_record.status == "keep" and incumbent_record.solver_config is not None:
         incumbent_config = incumbent_record.solver_config.__dict__.copy()
         incumbent_config["time_budget_ms"] = time_budget_ms
         return SolveConfig(**incumbent_config)
@@ -835,6 +876,16 @@ def _prioritized_search_keys(memory: ResearchMemory, benchmark_profile: dict[str
     if avg_orders >= 36:
         for key in ("use_cpsat", "lns_iterations", "bundle_candidate_pool_size"):
             scores[key] += 1
+
+    history_with_configs = [record for record in memory.history if record.solver_config is not None]
+    for key, allowed in DEFAULT_SEARCH_SPACE.items():
+        if not allowed:
+            continue
+        tried_values = {record.solver_config.__dict__.get(key) for record in history_with_configs}
+        missing_count = max(0, len(allowed) - len(tried_values))
+        if missing_count == 0:
+            continue
+        scores[key] += 1 if not tried_values else min(2, missing_count)
 
     return sorted(DEFAULT_SEARCH_SPACE.keys(), key=lambda key: (-scores[key], key))
 
@@ -902,6 +953,112 @@ def _dominant_bad_values(history: list[ExperimentRecord], search_space: dict[str
     return dominant_bad_values
 
 
+def _blocked_value_orders(history: list[ExperimentRecord], search_space: dict[str, list[object]]) -> dict[str, list[object]]:
+    dominant_bad_values = _dominant_bad_values(history, search_space)
+    blocked: dict[str, list[object]] = {}
+    for key, bad_values in dominant_bad_values.items():
+        allowed = search_space.get(key, [])
+        alternatives = [value for value in allowed if value not in bad_values]
+        if alternatives:
+            blocked[key] = bad_values
+    return blocked
+
+
+def _search_memory_digest(
+    memory: ResearchMemory,
+    search_space: dict[str, list[object]],
+    benchmark_profile: dict[str, object],
+) -> dict[str, object]:
+    insights = _parameter_value_insights(memory.history, search_space)
+    prioritized_keys = _prioritized_search_keys(memory, benchmark_profile)
+    blocked_values = _blocked_value_orders(memory.history, search_space)
+    incumbent = _best_record(memory.history)
+    incumbent_raw = incumbent.solver_config.__dict__ if incumbent is not None and incumbent.solver_config is not None else None
+
+    stable_values: list[dict[str, object]] = []
+    for key, rows in insights.items():
+        top_row = rows[0]
+        if int(top_row["keep_count"]) <= 0:
+            continue
+        stable_values.append(
+            {
+                "key": key,
+                "value": top_row["value"],
+                "keep_count": top_row["keep_count"],
+                "avg_expected_completed_orders": top_row["avg_expected_completed_orders"],
+                "avg_total_cost": top_row["avg_total_cost"],
+            }
+        )
+    stable_values.sort(
+        key=lambda row: (
+            -int(row["keep_count"]),
+            -float(row["avg_expected_completed_orders"]),
+            float(row["avg_total_cost"]),
+            str(row["key"]),
+        )
+    )
+
+    risky_values = [
+        {
+            "key": key,
+            "values": list(values),
+            "reason": "repeated_discards_or_crashes",
+        }
+        for key, values in blocked_values.items()
+    ]
+
+    exploration_gaps: list[dict[str, object]] = []
+    for key, allowed in search_space.items():
+        tried_values = []
+        for value in allowed:
+            if any(record.solver_config is not None and record.solver_config.__dict__.get(key) == value for record in memory.history):
+                tried_values.append(value)
+        missing_values = [value for value in allowed if value not in tried_values]
+        if not missing_values:
+            continue
+        exploration_gaps.append(
+            {
+                "key": key,
+                "priority_rank": prioritized_keys.index(key) + 1 if key in prioritized_keys else len(prioritized_keys) + 1,
+                "tried_count": len(tried_values),
+                "total_values": len(allowed),
+                "missing_values": missing_values,
+            }
+        )
+    exploration_gaps.sort(key=lambda row: (int(row["priority_rank"]), int(row["tried_count"]), str(row["key"])))
+
+    recent_failures: list[dict[str, object]] = []
+    for record in reversed(memory.history[-6:]):
+        if record.status == "keep" or record.solver_config is None:
+            continue
+        changed_keys = []
+        if incumbent_raw is not None:
+            changed_keys = [
+                key
+                for key in sorted(record.solver_config.__dict__)
+                if record.solver_config.__dict__.get(key) != incumbent_raw.get(key)
+            ]
+        recent_failures.append(
+            {
+                "experiment_id": record.experiment_id,
+                "status": record.status,
+                "changed_keys_vs_incumbent": changed_keys[:6],
+                "average_expected_completed_orders": round(record.benchmark_summary.average_expected_completed_orders, 6),
+                "average_total_cost": round(record.benchmark_summary.average_total_cost, 6),
+            }
+        )
+
+    return {
+        "regime_tags": _regime_tags(benchmark_profile),
+        "priority_knobs": prioritized_keys[:6],
+        "stable_values": stable_values[:6],
+        "risky_values": risky_values[:6],
+        "exploration_gaps": exploration_gaps[:6],
+        "recent_failures": recent_failures[:4],
+        "stagnating": _high_stagnation(memory),
+    }
+
+
 def _is_redundant_config(config: SolveConfig, memory: ResearchMemory) -> bool:
     signature = _config_signature(config)
     if signature in memory.seen_signatures:
@@ -940,6 +1097,7 @@ def _repair_proposed_solver_config(
     search_space: dict[str, list[object]],
     prioritized_keys: list[str],
     preferred_values: dict[str, list[object]],
+    blocked_values: dict[str, list[object]],
     memory: ResearchMemory,
     round_index: int,
     benchmark_profile: dict[str, object],
@@ -951,7 +1109,13 @@ def _repair_proposed_solver_config(
     for key, bad_values in dominant_bad_values.items():
         if raw.get(key) in bad_values:
             allowed = search_space.get(key, [])
-            raw[key] = _guided_value_choice(raw.get(key), allowed, preferred_values.get(key, []), round_index + len(repair_reasons) + 1)
+            raw[key] = _guided_value_choice(
+                raw.get(key),
+                allowed,
+                preferred_values.get(key, []),
+                round_index + len(repair_reasons) + 1,
+                blocked_values.get(key, []),
+            )
             repair_reasons.append(f"avoid_{key}")
 
     repaired = SolveConfig(**raw)
@@ -975,6 +1139,7 @@ def _repair_proposed_solver_config(
                 allowed,
                 preferred_values.get(key, []),
                 round_index + attempt + key_index + 1,
+                blocked_values.get(key, []),
             )
         _apply_benchmark_biases(candidate_raw, benchmark_profile, memory)
         candidate = SolveConfig(**candidate_raw)
@@ -1050,6 +1215,7 @@ def _mutated_solver_config(
     search_space: dict[str, list[object]],
     prioritized_keys: list[str],
     preferred_values: dict[str, list[object]],
+    blocked_values: dict[str, list[object]],
     memory: ResearchMemory,
     round_index: int,
     attempt: int,
@@ -1067,7 +1233,13 @@ def _mutated_solver_config(
     for key_index, key in enumerate(chosen_keys):
         allowed = search_space.get(key, [])
         preferred_for_key = preferred_values.get(key, [])
-        raw[key] = _guided_value_choice(raw.get(key), allowed, preferred_for_key, round_index + attempt + key_index)
+        raw[key] = _guided_value_choice(
+            raw.get(key),
+            allowed,
+            preferred_for_key,
+            round_index + attempt + key_index,
+            blocked_values.get(key, []),
+        )
 
     _apply_benchmark_biases(raw, benchmark_profile, memory)
 
@@ -1096,6 +1268,29 @@ def _apply_benchmark_biases(raw: dict[str, object], benchmark_profile: dict[str,
         raw["bundle_candidate_pool_size"] = max(int(raw.get("bundle_candidate_pool_size", 4)), 6)
 
 
+def _regime_tags(benchmark_profile: dict[str, object]) -> list[str]:
+    tags: list[str] = []
+    avg_orders = float(benchmark_profile.get("avg_orders", 0.0))
+    orders_per_rider = float(benchmark_profile.get("orders_per_rider", 0.0))
+    avg_bundle_candidates = float(benchmark_profile.get("avg_bundle_candidates", 0.0))
+    avg_match_density = float(benchmark_profile.get("avg_match_density", 0.0))
+
+    if orders_per_rider > 2.2:
+        tags.append("rider_constrained")
+    if avg_bundle_candidates < 1.0:
+        tags.append("bundle_sparse")
+    elif avg_bundle_candidates >= 8.0:
+        tags.append("bundle_rich")
+    if avg_match_density < 0.7:
+        tags.append("match_sparse")
+    elif avg_match_density >= 0.95:
+        tags.append("match_dense")
+    if avg_orders >= 36:
+        tags.append("large_instances")
+
+    return tags or ["balanced"]
+
+
 def _neighbor_value(current: object, allowed: list[object], offset: int) -> object:
     if not allowed:
         return current
@@ -1119,24 +1314,35 @@ def _neighbor_value(current: object, allowed: list[object], offset: int) -> obje
     return allowed[candidate_indexes[offset % len(candidate_indexes)]]
 
 
-def _guided_value_choice(current: object, allowed: list[object], preferred_values: list[object], offset: int) -> object:
+def _guided_value_choice(
+    current: object,
+    allowed: list[object],
+    preferred_values: list[object],
+    offset: int,
+    blocked_values: list[object] | None = None,
+) -> object:
     if not allowed:
         return current
 
+    blocked_set = set(blocked_values or [])
+    candidate_pool = [value for value in allowed if value not in blocked_set]
+    if not candidate_pool:
+        candidate_pool = list(allowed)
+
     ranked_candidates: list[object] = []
     for value in preferred_values:
-        if value in allowed and value != current and value not in ranked_candidates:
+        if value in candidate_pool and value != current and value not in ranked_candidates:
             ranked_candidates.append(value)
 
-    if current in allowed:
+    if current in candidate_pool:
         ranked_candidates.extend(
-            value for value in [_neighbor_value(current, allowed, offset + step) for step in range(len(allowed))]
+            value for value in [_neighbor_value(current, candidate_pool, offset + step) for step in range(len(candidate_pool))]
             if value != current and value not in ranked_candidates
         )
 
-    ranked_candidates.extend(value for value in allowed if value != current and value not in ranked_candidates)
+    ranked_candidates.extend(value for value in candidate_pool if value != current and value not in ranked_candidates)
     if not ranked_candidates:
-        return current if current in allowed else allowed[offset % len(allowed)]
+        return current if current in candidate_pool else candidate_pool[offset % len(candidate_pool)]
     return ranked_candidates[offset % len(ranked_candidates)]
 
 

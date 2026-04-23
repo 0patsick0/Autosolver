@@ -6,8 +6,11 @@ param(
   [string]$SummaryOutput = "examples/live_dashboard_summary.json",
   [string]$SearchSpacePath = "examples/research_search_space.json",
   [string]$DashboardUrl = "http://localhost:4173",
+  [string]$ControlApiUrl = "http://127.0.0.1:8765",
   [switch]$NoBrowser,
   [switch]$SkipDashboardServer,
+  [switch]$SkipControlServer,
+  [switch]$AutoRunResearch,
   [switch]$AllowRuleBasedFallback
 )
 
@@ -50,45 +53,60 @@ if (-not $SkipDashboardServer) {
   Start-Sleep -Seconds 2
 }
 
+if (-not $SkipControlServer) {
+  Write-Host "==> Starting local web control API in a new PowerShell window"
+  Start-Process powershell -WorkingDirectory $repoRoot -ArgumentList @(
+    "-NoExit",
+    "-Command",
+    "uv run autosolver-web"
+  )
+
+  Start-Sleep -Seconds 1
+}
+
 if (-not $NoBrowser) {
   Write-Host "==> Opening dashboard in the default browser"
   Start-Process $DashboardUrl
 }
 
-Write-Host "==> Running research with live dashboard replay output"
-$researchArgs = @(
-  "run",
-  "autosolver",
-  "research",
-  $benchmarkFullPath,
-  "--rounds",
-  $Rounds,
-  "--events",
-  $eventsFullPath,
-  "--output",
-  $summaryFullPath,
-  "--search-space",
-  $searchSpaceFullPath,
-  "--dashboard-output",
-  $dashboardOutputFullPath
-)
+if ($AutoRunResearch) {
+  Write-Host "==> Running research with live dashboard replay output"
+  $researchArgs = @(
+    "run",
+    "autosolver",
+    "research",
+    $benchmarkFullPath,
+    "--rounds",
+    $Rounds,
+    "--events",
+    $eventsFullPath,
+    "--output",
+    $summaryFullPath,
+    "--search-space",
+    $searchSpaceFullPath,
+    "--dashboard-output",
+    $dashboardOutputFullPath
+  )
 
-if ($AllowRuleBasedFallback) {
-  $researchArgs += "--allow-rule-based-fallback"
+  if ($AllowRuleBasedFallback) {
+    $researchArgs += "--allow-rule-based-fallback"
+  }
+
+  Push-Location $repoRoot
+  try {
+    & uv @researchArgs
+  }
+  finally {
+    Pop-Location
+  }
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "autosolver research failed with exit code $LASTEXITCODE"
+  }
+
+  Write-Host "==> Live run finished"
 }
 
-Push-Location $repoRoot
-try {
-  & uv @researchArgs
-}
-finally {
-  Pop-Location
-}
-
-if ($LASTEXITCODE -ne 0) {
-  throw "autosolver research failed with exit code $LASTEXITCODE"
-}
-
-Write-Host "==> Live run finished"
 Write-Host "Dashboard: $DashboardUrl"
+Write-Host "Control API: $ControlApiUrl"
 Write-Host "Summary: $summaryFullPath"

@@ -18,6 +18,7 @@ examples/*state*.json
 examples/*validation*.json
 examples/*submission*.json
 examples/generated/
+examples/web_runs/
 examples/fullcheck_run/
 examples/iter_bundle_run/
 examples/smoke_generated/

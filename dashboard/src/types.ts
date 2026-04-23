@@ -152,6 +152,58 @@ export interface ReplayData {
   agent?: ReplayAgentSummary;
 }
 
+export const CONTROL_JOB_STATUS = {
+  RUNNING: "running",
+  CANCELLING: "cancelling",
+  SUCCEEDED: "succeeded",
+  FAILED: "failed",
+  CANCELLED: "cancelled",
+} as const;
+
+export type ControlJobStatus = (typeof CONTROL_JOB_STATUS)[keyof typeof CONTROL_JOB_STATUS];
+
+export interface ControlProviderSummary {
+  label: string;
+  llmConfigured: boolean;
+}
+
+export interface ControlDefaults {
+  benchmarkPath: string;
+  instancePath: string;
+  searchSpacePath: string;
+  dashboardOutputPath: string;
+  rounds: number;
+  timeBudgetMs: number;
+  seed: number;
+  allowRuleBasedFallback: boolean;
+}
+
+export interface ControlJob {
+  jobId: string;
+  kind: string;
+  status: ControlJobStatus | string;
+  command: string[];
+  startedAt: string;
+  finishedAt: string | null;
+  outputRoot: string | null;
+  artifacts: Record<string, string>;
+  dashboardReplayPath: string | null;
+  exitCode: number | null;
+  error: string | null;
+  pid: number | null;
+  logTail: string;
+}
+
+export interface ControlState {
+  available: boolean;
+  repoRoot: string;
+  apiBase: string;
+  defaults: ControlDefaults;
+  provider: ControlProviderSummary;
+  currentJob: ControlJob | null;
+  recentJobs: ControlJob[];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -252,6 +304,44 @@ function isReplayAgentSummary(value: unknown): value is ReplayAgentSummary {
   );
 }
 
+function isControlProviderSummary(value: unknown): value is ControlProviderSummary {
+  return isRecord(value) && typeof value.label === "string" && typeof value.llmConfigured === "boolean";
+}
+
+function isControlDefaults(value: unknown): value is ControlDefaults {
+  return (
+    isRecord(value) &&
+    typeof value.benchmarkPath === "string" &&
+    typeof value.instancePath === "string" &&
+    typeof value.searchSpacePath === "string" &&
+    typeof value.dashboardOutputPath === "string" &&
+    typeof value.rounds === "number" &&
+    typeof value.timeBudgetMs === "number" &&
+    typeof value.seed === "number" &&
+    typeof value.allowRuleBasedFallback === "boolean"
+  );
+}
+
+function isControlJob(value: unknown): value is ControlJob {
+  return (
+    isRecord(value) &&
+    typeof value.jobId === "string" &&
+    typeof value.kind === "string" &&
+    typeof value.status === "string" &&
+    Array.isArray(value.command) &&
+    value.command.every((item) => typeof item === "string") &&
+    typeof value.startedAt === "string" &&
+    (typeof value.finishedAt === "string" || value.finishedAt === null) &&
+    (typeof value.outputRoot === "string" || value.outputRoot === null) &&
+    isRecord(value.artifacts) &&
+    (typeof value.dashboardReplayPath === "string" || value.dashboardReplayPath === null) &&
+    (typeof value.exitCode === "number" || value.exitCode === null) &&
+    (typeof value.error === "string" || value.error === null) &&
+    (typeof value.pid === "number" || value.pid === null) &&
+    typeof value.logTail === "string"
+  );
+}
+
 export function isReplayData(value: unknown): value is ReplayData {
   return (
     isRecord(value) &&
@@ -265,5 +355,19 @@ export function isReplayData(value: unknown): value is ReplayData {
     (value.roundInsights === undefined || (Array.isArray(value.roundInsights) && value.roundInsights.every(isRoundInsight))) &&
     (value.caseLeaderboard === undefined || (Array.isArray(value.caseLeaderboard) && value.caseLeaderboard.every(isCaseLeaderboardEntry))) &&
     (value.agent === undefined || isReplayAgentSummary(value.agent))
+  );
+}
+
+export function isControlState(value: unknown): value is ControlState {
+  return (
+    isRecord(value) &&
+    typeof value.available === "boolean" &&
+    typeof value.repoRoot === "string" &&
+    typeof value.apiBase === "string" &&
+    isControlDefaults(value.defaults) &&
+    isControlProviderSummary(value.provider) &&
+    (value.currentJob === null || isControlJob(value.currentJob)) &&
+    Array.isArray(value.recentJobs) &&
+    value.recentJobs.every(isControlJob)
   );
 }

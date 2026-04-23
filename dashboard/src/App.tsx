@@ -1,8 +1,12 @@
 import { startTransition, useEffect, useEffectEvent, useState, type ChangeEvent } from "react";
 import {
+  CONTROL_JOB_STATUS,
   EVENT_TYPES,
+  isControlState,
   isReplayData,
   type CaseLeaderboardEntry,
+  type ControlJob,
+  type ControlState,
   type ReplayAgentSummary,
   type ReplayData,
   type ReplayEvent,
@@ -14,6 +18,7 @@ const LIVE_REPLAY_SOURCE_LABEL = "本地实时 replay-data.json";
 const DEMO_REPLAY_SOURCE_LABEL = "云端内置 demo-replay.json";
 const LIVE_REPLAY_FILE = "replay-data.json";
 const DEMO_REPLAY_FILE = "demo-replay.json";
+const CONTROL_API_BASE = (import.meta.env.VITE_AUTOSOLVER_API_BASE as string | undefined) ?? "http://127.0.0.1:8765";
 
 const PROCESS_STEPS = [
   {
@@ -114,6 +119,96 @@ interface CaseCardProps {
   row: CaseLeaderboardEntry;
 }
 
+interface RunDraft {
+  benchmarkPath: string;
+  instancePath: string;
+  searchSpacePath: string;
+  rounds: number;
+  timeBudgetMs: number;
+  seed: number;
+  allowRuleBasedFallback: boolean;
+}
+
+interface RunPreset {
+  id: string;
+  label: string;
+  description: string;
+  patch: Partial<RunDraft>;
+  recommendedKind: "pytest" | "smoke" | "research" | "benchmark" | "solve";
+}
+
+interface ControlConsoleProps {
+  controlState: ControlState | null;
+  controlError: string | null;
+  isLaunching: boolean;
+  draft: RunDraft;
+  presets: RunPreset[];
+  artifactPreviewPath: string | null;
+  artifactPreviewBody: string | null;
+  artifactPreviewError: string | null;
+  onDraftChange: (patch: Partial<RunDraft>) => void;
+  onApplyPreset: (preset: RunPreset) => void;
+  onRun: (kind: "pytest" | "smoke" | "research" | "benchmark" | "solve") => void;
+  onCancel: (job: ControlJob) => void;
+  onRefresh: () => void;
+  onInspectArtifact: (path: string) => void;
+  onLoadReplayArtifact: (path: string) => void;
+}
+
+const RUN_PRESETS: RunPreset[] = [
+  {
+    id: "demo-research",
+    label: "演示 Research",
+    description: "用轻量 demo benchmark 跑 2 轮 research，适合讲流程。",
+    patch: {
+      benchmarkPath: "examples/benchmarks/benchmark_manifest.json",
+      searchSpacePath: "examples/research_search_space.json",
+      rounds: 2,
+      timeBudgetMs: 10_000,
+      seed: 0,
+      allowRuleBasedFallback: false,
+    },
+    recommendedKind: "research",
+  },
+  {
+    id: "cloud-probe",
+    label: "Cloud Probe",
+    description: "用更复杂的 cloud probe benchmark 检验 agent 的策略探索。",
+    patch: {
+      benchmarkPath: "examples/generated/cloud_probe/benchmark_manifest.json",
+      searchSpacePath: "examples/research_search_space.json",
+      rounds: 2,
+      timeBudgetMs: 10_000,
+      seed: 0,
+      allowRuleBasedFallback: true,
+    },
+    recommendedKind: "research",
+  },
+  {
+    id: "sample-solve",
+    label: "样例 Solve",
+    description: "对单个样例实例直接出解，适合检查 submission 和验证流程。",
+    patch: {
+      instancePath: "examples/instances/sample_instance.json",
+      timeBudgetMs: 10_000,
+      seed: 0,
+    },
+    recommendedKind: "solve",
+  },
+  {
+    id: "quick-smoke",
+    label: "快速 Smoke",
+    description: "一键跑合成 benchmark、research、validate 和 replay，适合演示闭环。",
+    patch: {
+      rounds: 1,
+      timeBudgetMs: 500,
+      seed: 9,
+      allowRuleBasedFallback: true,
+    },
+    recommendedKind: "smoke",
+  },
+];
+
 const countFormatter = new Intl.NumberFormat("zh-CN", {
   maximumFractionDigits: 2,
 });
@@ -198,6 +293,21 @@ function formatStatus(status: string | null | undefined): string {
   if (status === "pending") {
     return "进行中";
   }
+  if (status === CONTROL_JOB_STATUS.RUNNING) {
+    return "运行中";
+  }
+  if (status === CONTROL_JOB_STATUS.CANCELLING) {
+    return "停止中";
+  }
+  if (status === CONTROL_JOB_STATUS.SUCCEEDED) {
+    return "已完成";
+  }
+  if (status === CONTROL_JOB_STATUS.FAILED) {
+    return "失败";
+  }
+  if (status === CONTROL_JOB_STATUS.CANCELLED) {
+    return "已停止";
+  }
   return status ?? "未知";
 }
 
@@ -226,6 +336,77 @@ async function loadReplayPayload(filename: string): Promise<ReplayData> {
     throw new Error(`${filename} 不是合法的 replay JSON。`);
   }
   return payload;
+}
+
+async function loadControlSnapshot(): Promise<ControlState> {
+  const response = await fetch(`${CONTROL_API_BASE}/api/control/status?ts=${Date.now()}`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`控制台状态加载失败：${response.status} ${response.statusText}`);
+  }
+  const payload: unknown = await response.json();
+  if (!isControlState(payload)) {
+    throw new Error("控制台状态返回的 JSON 结构不合法。");
+  }
+  return payload;
+}
+
+async function runControlJob(kind: "pytest" | "smoke" | "research" | "benchmark" | "solve", draft: RunDraft): Promise<ControlState> {
+  const response = await fetch(`${CONTROL_API_BASE}/api/control/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      kind,
+      benchmarkPath: draft.benchmarkPath,
+      instancePath: draft.instancePath,
+      searchSpacePath: draft.searchSpacePath,
+      rounds: draft.rounds,
+      timeBudgetMs: draft.timeBudgetMs,
+      seed: draft.seed,
+      allowRuleBasedFallback: draft.allowRuleBasedFallback,
+    }),
+  });
+
+  const payload: unknown = await response.json();
+  if (!isRecord(payload)) {
+    throw new Error("控制台启动任务失败，返回结果不可解析。");
+  }
+  const state = payload.state;
+  if (!isControlState(state)) {
+    throw new Error("控制台启动任务失败，状态结构不合法。");
+  }
+  if (!response.ok) {
+    throw new Error(asString(payload.error) ?? "控制台拒绝了这次启动请求。");
+  }
+  return state;
+}
+
+async function cancelControlJob(jobId: string): Promise<ControlState> {
+  const response = await fetch(`${CONTROL_API_BASE}/api/control/jobs/${jobId}/cancel`, {
+    method: "POST",
+  });
+  const payload: unknown = await response.json();
+  if (!isRecord(payload)) {
+    throw new Error("取消任务失败，返回结果不可解析。");
+  }
+  const state = payload.state;
+  if (!isControlState(state)) {
+    throw new Error("取消任务失败，状态结构不合法。");
+  }
+  if (!response.ok) {
+    throw new Error(asString(payload.error) ?? "控制台拒绝了取消请求。");
+  }
+  return state;
+}
+
+async function loadControlArtifactText(path: string): Promise<{ body: string; contentType: string }> {
+  const response = await fetch(`${CONTROL_API_BASE}/api/control/file?path=${encodeURIComponent(path)}`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`加载产物失败：${response.status} ${response.statusText}`);
+  }
+  return {
+    body: await response.text(),
+    contentType: response.headers.get("content-type") ?? "text/plain",
+  };
 }
 
 function buildStoryBeats(events: ReplayEvent[]): StoryBeat[] {
@@ -625,6 +806,264 @@ function PlaybackControls({
   );
 }
 
+function ControlConsole({
+  controlState,
+  controlError,
+  isLaunching,
+  draft,
+  presets,
+  artifactPreviewPath,
+  artifactPreviewBody,
+  artifactPreviewError,
+  onDraftChange,
+  onApplyPreset,
+  onRun,
+  onCancel,
+  onRefresh,
+  onInspectArtifact,
+  onLoadReplayArtifact,
+}: ControlConsoleProps) {
+  const currentJob = controlState?.currentJob ?? null;
+  const isBusy =
+    currentJob?.status === CONTROL_JOB_STATUS.RUNNING || currentJob?.status === CONTROL_JOB_STATUS.CANCELLING;
+  const recentJobs = controlState?.recentJobs ?? [];
+  const previewVisible = Boolean(artifactPreviewPath || artifactPreviewError);
+
+  return (
+    <section className="panel control-console-panel">
+      <div className="panel-head">
+        <p className="section-eyebrow">网页控制台</p>
+        <h2>直接从网页触发本地测试、研究和求解</h2>
+      </div>
+
+      <div className="control-console-grid">
+        <div className="control-console-copy">
+          <p className="section-text">
+            这个面板会连接本机的 `autosolver-web` 控制服务。连接成功后，你可以不离开网页，直接发起 `pytest`、
+            `smoke`、`research`、`benchmark` 和 `solve`，并且实时看到命令、状态和日志。
+          </p>
+          <div className="hero-chips">
+            <span className={`meta-chip ${controlState ? "" : "meta-chip-muted"}`}>{controlState ? "本地控制服务已连接" : "控制服务未连接"}</span>
+            <span className="meta-chip">API {controlState?.apiBase ?? CONTROL_API_BASE}</span>
+            <span className="meta-chip">{controlState?.provider.llmConfigured ? "LLM 已配置" : "当前可能只能跑 fallback"}</span>
+          </div>
+        </div>
+
+        <div className="control-console-fields">
+          <div className="control-preset-block">
+            <span>任务预设</span>
+            <div className="preset-grid">
+              {presets.map((preset) => (
+                <button className="preset-card" key={preset.id} type="button" onClick={() => onApplyPreset(preset)}>
+                  <strong>{preset.label}</strong>
+                  <p>{preset.description}</p>
+                  <span className="config-chip">推荐动作 {preset.recommendedKind.toUpperCase()}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="control-field">
+            <span>Benchmark 路径</span>
+            <input
+              type="text"
+              value={draft.benchmarkPath}
+              onChange={(event) => onDraftChange({ benchmarkPath: event.target.value })}
+              placeholder="examples/benchmarks/benchmark_manifest.json"
+            />
+          </label>
+          <label className="control-field">
+            <span>实例路径</span>
+            <input
+              type="text"
+              value={draft.instancePath}
+              onChange={(event) => onDraftChange({ instancePath: event.target.value })}
+              placeholder="examples/instances/sample_instance.json"
+            />
+          </label>
+          <label className="control-field">
+            <span>Search Space</span>
+            <input
+              type="text"
+              value={draft.searchSpacePath}
+              onChange={(event) => onDraftChange({ searchSpacePath: event.target.value })}
+              placeholder="examples/research_search_space.json"
+            />
+          </label>
+          <label className="control-field control-field-small">
+            <span>轮次</span>
+            <input
+              type="number"
+              min={1}
+              max={12}
+              value={draft.rounds}
+              onChange={(event) => onDraftChange({ rounds: Number(event.target.value) || 1 })}
+            />
+          </label>
+          <label className="control-field control-field-small">
+            <span>时间预算 ms</span>
+            <input
+              type="number"
+              min={100}
+              step={100}
+              value={draft.timeBudgetMs}
+              onChange={(event) => onDraftChange({ timeBudgetMs: Number(event.target.value) || 10_000 })}
+            />
+          </label>
+          <label className="control-field control-field-small">
+            <span>Seed</span>
+            <input
+              type="number"
+              min={0}
+              value={draft.seed}
+              onChange={(event) => onDraftChange({ seed: Number(event.target.value) || 0 })}
+            />
+          </label>
+          <label className="control-checkbox">
+            <input
+              type="checkbox"
+              checked={draft.allowRuleBasedFallback}
+              onChange={(event) => onDraftChange({ allowRuleBasedFallback: event.target.checked })}
+            />
+            <span>允许 rule-based fallback</span>
+          </label>
+        </div>
+      </div>
+
+      <div className="control-console-actions">
+        <button className="ghost-button" type="button" onClick={() => onRun("pytest")} disabled={!controlState || isLaunching || isBusy}>
+          跑 Pytest 回归
+        </button>
+        <button className="ghost-button" type="button" onClick={() => onRun("smoke")} disabled={!controlState || isLaunching || isBusy}>
+          跑 Smoke 验收
+        </button>
+        <button className="primary-button" type="button" onClick={() => onRun("research")} disabled={!controlState || isLaunching || isBusy}>
+          跑 Research
+        </button>
+        <button className="ghost-button" type="button" onClick={() => onRun("benchmark")} disabled={!controlState || isLaunching || isBusy}>
+          跑 Benchmark
+        </button>
+        <button className="ghost-button" type="button" onClick={() => onRun("solve")} disabled={!controlState || isLaunching || isBusy}>
+          跑 Solve
+        </button>
+        <button className="ghost-button" type="button" onClick={onRefresh} disabled={isLaunching}>
+          刷新状态
+        </button>
+        {currentJob ? (
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => onCancel(currentJob)}
+            disabled={currentJob.status !== CONTROL_JOB_STATUS.RUNNING}
+          >
+            停止当前任务
+          </button>
+        ) : null}
+      </div>
+
+      {controlError ? (
+        <div className="error-banner" role="status" aria-live="polite">
+          {controlError}
+        </div>
+      ) : null}
+
+      <div className="control-console-grid control-console-status-grid">
+        <section className="control-status-card">
+          <div className="session-round-row">
+            <span className={`status-pill status-${currentJob?.status ?? "pending"}`}>{formatStatus(currentJob?.status ?? "pending")}</span>
+            <span className="meta-chip">{currentJob ? currentJob.kind.toUpperCase() : "暂无运行任务"}</span>
+          </div>
+          <p className="section-text control-status-copy">
+            {currentJob
+              ? `开始于 ${formatTimestamp(currentJob.startedAt)}，${currentJob.finishedAt ? `结束于 ${formatTimestamp(currentJob.finishedAt)}。` : "当前仍在运行中。"}`
+              : "控制服务已就绪，选择一个动作就可以开始执行。"}
+          </p>
+          {currentJob?.outputRoot ? <p className="control-path">输出目录：{currentJob.outputRoot}</p> : null}
+          {currentJob?.dashboardReplayPath ? <p className="control-path">回放文件：{currentJob.dashboardReplayPath}</p> : null}
+          {currentJob?.command.length ? (
+            <div className="command-preview">
+              <strong>当前命令</strong>
+              <code>{currentJob.command.join(" ")}</code>
+            </div>
+          ) : null}
+          {currentJob && Object.keys(currentJob.artifacts).length > 0 ? (
+            <div className="artifact-actions">
+              <strong>当前任务产物</strong>
+              <div className="artifact-chip-row">
+                {Object.entries(currentJob.artifacts).map(([label, path]) => (
+                  <div className="artifact-chip-card" key={`${currentJob.jobId}-${label}`}>
+                    <span className="config-chip">{label}</span>
+                    <button className="ghost-button" type="button" onClick={() => onInspectArtifact(path)}>
+                      查看
+                    </button>
+                    {path.endsWith(".json") && path.includes("replay") ? (
+                      <button className="ghost-button" type="button" onClick={() => onLoadReplayArtifact(path)}>
+                        载入舞台
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="control-status-card">
+          <strong>日志尾部</strong>
+          <pre className="control-log">{currentJob?.logTail || "这里会滚动显示最近的命令输出。启动一个任务后就会有内容。"}</pre>
+        </section>
+      </div>
+
+      <section className="control-status-card">
+        <strong>最近运行</strong>
+        <div className="job-history-list">
+          {recentJobs.length > 0 ? (
+            recentJobs.map((job) => (
+              <article className="job-history-item" key={job.jobId}>
+                <div className="session-round-row">
+                  <span className={`status-pill status-${job.status}`}>{formatStatus(job.status)}</span>
+                  <strong translate="no">{job.jobId}</strong>
+                </div>
+                <p>
+                  {job.kind.toUpperCase()} · 开始于 {formatTimestamp(job.startedAt)}
+                  {job.outputRoot ? ` · 输出到 ${job.outputRoot}` : ""}
+                </p>
+                {Object.keys(job.artifacts).length > 0 ? (
+                  <div className="artifact-chip-row">
+                    {Object.entries(job.artifacts).map(([label, path]) => (
+                      <div className="artifact-chip-card" key={`${job.jobId}-${label}`}>
+                        <span className="config-chip">{label}</span>
+                        <button className="ghost-button" type="button" onClick={() => onInspectArtifact(path)}>
+                          查看
+                        </button>
+                        {path.endsWith(".json") && path.includes("replay") ? (
+                          <button className="ghost-button" type="button" onClick={() => onLoadReplayArtifact(path)}>
+                            载入舞台
+                          </button>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </article>
+            ))
+          ) : (
+            <div className="empty-state">当前还没有从网页发起过本地任务。</div>
+          )}
+        </div>
+      </section>
+
+      {previewVisible ? (
+        <section className="control-status-card">
+          <strong>产物预览</strong>
+          {artifactPreviewPath ? <p className="control-path">当前文件：{artifactPreviewPath}</p> : null}
+          {artifactPreviewError ? <div className="error-banner">{artifactPreviewError}</div> : null}
+          {artifactPreviewBody ? <pre className="control-log artifact-preview-log">{artifactPreviewBody}</pre> : null}
+        </section>
+      ) : null}
+    </section>
+  );
+}
+
 function ProcessSteps() {
   return (
     <section className="process-panel">
@@ -1001,6 +1440,21 @@ function App() {
   const [playbackSpeedMs, setPlaybackSpeedMs] = useState(1200);
   const [detailBeat, setDetailBeat] = useState<StoryBeat | null>(null);
   const [hasAutoStarted, setHasAutoStarted] = useState(false);
+  const [controlState, setControlState] = useState<ControlState | null>(null);
+  const [controlError, setControlError] = useState<string | null>(null);
+  const [isLaunching, setIsLaunching] = useState(false);
+  const [artifactPreviewPath, setArtifactPreviewPath] = useState<string | null>(null);
+  const [artifactPreviewBody, setArtifactPreviewBody] = useState<string | null>(null);
+  const [artifactPreviewError, setArtifactPreviewError] = useState<string | null>(null);
+  const [runDraft, setRunDraft] = useState<RunDraft>({
+    benchmarkPath: "examples/benchmarks/benchmark_manifest.json",
+    instancePath: "examples/instances/sample_instance.json",
+    searchSpacePath: "examples/research_search_space.json",
+    rounds: 2,
+    timeBudgetMs: 10_000,
+    seed: 0,
+    allowRuleBasedFallback: false,
+  });
 
   const loadBundledReplay = useEffectEvent(async () => {
     let payload: ReplayData;
@@ -1030,6 +1484,23 @@ function App() {
     });
   });
 
+  const loadControlStatus = useEffectEvent(async () => {
+    const snapshot = await loadControlSnapshot();
+    startTransition(() => {
+      setControlState(snapshot);
+      setControlError(null);
+      setRunDraft((current) => ({
+        benchmarkPath: current.benchmarkPath || snapshot.defaults.benchmarkPath,
+        instancePath: current.instancePath || snapshot.defaults.instancePath,
+        searchSpacePath: current.searchSpacePath || snapshot.defaults.searchSpacePath,
+        rounds: current.rounds || snapshot.defaults.rounds,
+        timeBudgetMs: current.timeBudgetMs || snapshot.defaults.timeBudgetMs,
+        seed: current.seed ?? snapshot.defaults.seed,
+        allowRuleBasedFallback: current.allowRuleBasedFallback,
+      }));
+    });
+  });
+
   useEffect(() => {
     let cancelled = false;
 
@@ -1050,6 +1521,25 @@ function App() {
   }, [loadBundledReplay]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function bootstrapControl() {
+      try {
+        await loadControlStatus();
+      } catch (loadError) {
+        if (!cancelled) {
+          setControlError(loadError instanceof Error ? loadError.message : "加载控制服务状态时发生未知错误。");
+        }
+      }
+    }
+
+    void bootstrapControl();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadControlStatus]);
+
+  useEffect(() => {
     if (!isBundledReplaySource(sourceLabel)) {
       return;
     }
@@ -1062,6 +1552,18 @@ function App() {
       window.clearInterval(intervalId);
     };
   }, [loadBundledReplay, sourceLabel]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      void loadControlStatus().catch((loadError) => {
+        setControlError(loadError instanceof Error ? loadError.message : "控制服务状态轮询失败。");
+      });
+    }, 1500);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [loadControlStatus]);
 
   const events = data?.events ?? [];
   const roundInsights = data?.roundInsights ?? [];
@@ -1197,6 +1699,98 @@ function App() {
     setDetailBeat(null);
   }
 
+  function handleDraftChange(patch: Partial<RunDraft>) {
+    setRunDraft((current) => ({ ...current, ...patch }));
+  }
+
+  function handleApplyPreset(preset: RunPreset) {
+    setRunDraft((current) => ({ ...current, ...preset.patch }));
+  }
+
+  async function handleRun(kind: "pytest" | "smoke" | "research" | "benchmark" | "solve") {
+    setIsLaunching(true);
+    try {
+      const snapshot = await runControlJob(kind, runDraft);
+      startTransition(() => {
+        setControlState(snapshot);
+        setControlError(null);
+      });
+      if (kind !== "pytest") {
+        setSourceLabel(LIVE_REPLAY_SOURCE_LABEL);
+        setVisibleBeatCount(0);
+        setIsPlaying(false);
+        setHasAutoStarted(false);
+        await loadBundledReplay();
+      }
+    } catch (launchError) {
+      setControlError(launchError instanceof Error ? launchError.message : "网页启动任务失败。");
+    } finally {
+      setIsLaunching(false);
+    }
+  }
+
+  async function handleCancel(job: ControlJob) {
+    try {
+      const snapshot = await cancelControlJob(job.jobId);
+      startTransition(() => {
+        setControlState(snapshot);
+        setControlError(null);
+      });
+    } catch (cancelError) {
+      setControlError(cancelError instanceof Error ? cancelError.message : "取消任务失败。");
+    }
+  }
+
+  async function handleInspectArtifact(path: string) {
+    try {
+      const loaded = await loadControlArtifactText(path);
+      let previewBody = loaded.body;
+      if (loaded.contentType.includes("json")) {
+        const parsed: unknown = JSON.parse(loaded.body);
+        previewBody = JSON.stringify(parsed, null, 2);
+      }
+      startTransition(() => {
+        setArtifactPreviewPath(path);
+        setArtifactPreviewBody(previewBody);
+        setArtifactPreviewError(null);
+      });
+    } catch (artifactError) {
+      startTransition(() => {
+        setArtifactPreviewPath(path);
+        setArtifactPreviewBody(null);
+        setArtifactPreviewError(artifactError instanceof Error ? artifactError.message : "读取产物失败。");
+      });
+    }
+  }
+
+  async function handleLoadReplayArtifact(path: string) {
+    try {
+      const loaded = await loadControlArtifactText(path);
+      const payload: unknown = JSON.parse(loaded.body);
+      if (!isReplayData(payload)) {
+        throw new Error("这个产物不是合法的 replay JSON，无法载入舞台。");
+      }
+      startTransition(() => {
+        setData(payload);
+        setError(null);
+        setSourceLabel(path);
+        setLastReloadedAt(new Date().toISOString());
+        setVisibleBeatCount(0);
+        setIsPlaying(false);
+        setHasAutoStarted(false);
+        setArtifactPreviewPath(path);
+        setArtifactPreviewBody(JSON.stringify(payload, null, 2));
+        setArtifactPreviewError(null);
+      });
+    } catch (artifactError) {
+      startTransition(() => {
+        setArtifactPreviewPath(path);
+        setArtifactPreviewBody(null);
+        setArtifactPreviewError(artifactError instanceof Error ? artifactError.message : "载入 replay 失败。");
+      });
+    }
+  }
+
   return (
     <main className="page-shell" id="main-content">
       <a className="skip-link" href="#story-stage">
@@ -1236,6 +1830,28 @@ function App() {
         lastReloadedAt={lastReloadedAt}
         onLoadLocalReplay={handleLoadLocalReplay}
         onUseBundledReplay={handleUseBundledReplay}
+      />
+
+      <ControlConsole
+        controlState={controlState}
+        controlError={controlError}
+        isLaunching={isLaunching}
+        draft={runDraft}
+        presets={RUN_PRESETS}
+        artifactPreviewPath={artifactPreviewPath}
+        artifactPreviewBody={artifactPreviewBody}
+        artifactPreviewError={artifactPreviewError}
+        onDraftChange={handleDraftChange}
+        onApplyPreset={handleApplyPreset}
+        onRun={handleRun}
+        onCancel={handleCancel}
+        onRefresh={() => {
+          void loadControlStatus().catch((loadError) => {
+            setControlError(loadError instanceof Error ? loadError.message : "刷新控制服务状态失败。");
+          });
+        }}
+        onInspectArtifact={handleInspectArtifact}
+        onLoadReplayArtifact={handleLoadReplayArtifact}
       />
 
       <ProcessSteps />

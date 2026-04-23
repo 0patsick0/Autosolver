@@ -11,6 +11,7 @@ Rules:
   2. minimize average total cost
 - Use the benchmark_profile, incumbent, and recent solver_config history to choose the next move deliberately.
 - Read parameter_insights carefully. Prefer values that have historically helped unless you are making a clearly motivated exploration move.
+- Read strategy_memory carefully. Respect regime_tags, stable_values, risky_values, exploration_gaps, and recent_failures when choosing the next experiment.
 - If the benchmark looks rider-constrained, prefer stronger top-k or bundle generation exploration.
 - If bundle candidates are sparse, explicitly consider generated bundle knobs instead of repeating conservative settings.
 - When changing a strong incumbent, prefer 1 to 3 coordinated knob changes instead of a full random reset.

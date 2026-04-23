@@ -20,6 +20,7 @@ dev = [
 
 [project.scripts]
 autosolver = "autosolver.cli:main"
+autosolver-web = "autosolver.web_control:main"
 
 [tool.setuptools]
 include-package-data = true
