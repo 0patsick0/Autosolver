@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useEffectEvent, useState, type ChangeEvent } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
   CONTROL_JOB_STATUS,
   EVENT_TYPES,
@@ -14,32 +14,34 @@ import {
 } from "./types";
 import "./styles.css";
 
-const LIVE_REPLAY_SOURCE_LABEL = "本地实时 replay-data.json";
-const DEMO_REPLAY_SOURCE_LABEL = "云端内置 demo-replay.json";
+const LIVE_REPLAY_SOURCE_LABEL = "Local live replay-data.json";
+const DEMO_REPLAY_SOURCE_LABEL = "Bundled demo-replay.json";
 const LIVE_REPLAY_FILE = "replay-data.json";
 const DEMO_REPLAY_FILE = "demo-replay.json";
 const CONTROL_API_BASE = (import.meta.env.VITE_AUTOSOLVER_API_BASE as string | undefined) ?? "http://127.0.0.1:8765";
+const RUN_DRAFT_STORAGE_KEY = "autosolver.dashboard.runDraft.v1";
+const PLAYBACK_SPEED_STORAGE_KEY = "autosolver.dashboard.playbackSpeed.v1";
 
 const PROCESS_STEPS = [
   {
     step: "01",
-    title: "读取配送场景",
-    description: "先把订单、骑手、接单概率、成本分数和业务约束统一整理成一个可求解的问题。",
+    title: "Normalize Inputs",
+    description: "Build one canonical view over orders, riders, probabilities, costs, and constraints.",
   },
   {
     step: "02",
-    title: "Agent 提出策略",
-    description: "LLM 会结合历史经验形成下一轮假设，而不是机械地重复同一套算法。",
+    title: "Propose Strategy",
+    description: "Agent proposes hypotheses instead of repeating one fixed algorithm end-to-end.",
   },
   {
     step: "03",
-    title: "工具执行求解",
-    description: "本地 solver 会真的跑组合求解，把每个样例的结果和候选池信息算出来。",
+    title: "Run Solvers",
+    description: "Local solver executes real benchmark runs and returns measurable outcomes.",
   },
   {
     step: "04",
-    title: "自动评估与复盘",
-    description: "系统会自动 keep 或 discard，并把经验写回记忆，推动下一轮继续变聪明。",
+    title: "Keep or Discard",
+    description: "System compares outcomes, keeps winners, and carries lessons into next round.",
   },
 ] as const;
 
@@ -73,7 +75,9 @@ interface ControlBarProps {
   autoRefreshEnabled: boolean;
   lastReloadedAt: string | null;
   onLoadLocalReplay: (event: ChangeEvent<HTMLInputElement>) => void;
-  onUseBundledReplay: () => void;
+  onUseDemoReplay: () => void;
+  onReloadLiveReplay: () => void;
+  onToggleAutoRefresh: () => void;
 }
 
 interface PlaybackControlsProps {
@@ -129,17 +133,32 @@ interface RunDraft {
   allowRuleBasedFallback: boolean;
 }
 
+const DEFAULT_RUN_DRAFT: RunDraft = {
+  benchmarkPath: "examples/benchmarks/benchmark_manifest.json",
+  instancePath: "examples/instances/sample_instance.json",
+  searchSpacePath: "examples/research_search_space.json",
+  rounds: 2,
+  timeBudgetMs: 10_000,
+  seed: 0,
+  allowRuleBasedFallback: false,
+};
+
+type ControlRunKind = "pytest" | "smoke" | "research" | "benchmark" | "solve" | "solve-validate" | "solve-submit";
+
 interface RunPreset {
   id: string;
   label: string;
   description: string;
   patch: Partial<RunDraft>;
-  recommendedKind: "pytest" | "smoke" | "research" | "benchmark" | "solve";
+  recommendedKind: ControlRunKind;
 }
+
+type UploadTarget = "benchmark" | "instance" | "searchSpace";
 
 interface ControlConsoleProps {
   controlState: ControlState | null;
   controlError: string | null;
+  controlNotice: string | null;
   isLaunching: boolean;
   draft: RunDraft;
   presets: RunPreset[];
@@ -148,7 +167,8 @@ interface ControlConsoleProps {
   artifactPreviewError: string | null;
   onDraftChange: (patch: Partial<RunDraft>) => void;
   onApplyPreset: (preset: RunPreset) => void;
-  onRun: (kind: "pytest" | "smoke" | "research" | "benchmark" | "solve") => void;
+  onUploadFile: (target: UploadTarget, event: ChangeEvent<HTMLInputElement>) => void;
+  onRun: (kind: ControlRunKind) => void;
   onCancel: (job: ControlJob) => void;
   onRefresh: () => void;
   onInspectArtifact: (path: string) => void;
@@ -158,8 +178,8 @@ interface ControlConsoleProps {
 const RUN_PRESETS: RunPreset[] = [
   {
     id: "demo-research",
-    label: "演示 Research",
-    description: "用轻量 demo benchmark 跑 2 轮 research，适合讲流程。",
+    label: "Demo Research",
+    description: "Two rounds on the default benchmark for a clean live demonstration.",
     patch: {
       benchmarkPath: "examples/benchmarks/benchmark_manifest.json",
       searchSpacePath: "examples/research_search_space.json",
@@ -173,7 +193,7 @@ const RUN_PRESETS: RunPreset[] = [
   {
     id: "cloud-probe",
     label: "Cloud Probe",
-    description: "用更复杂的 cloud probe benchmark 检验 agent 的策略探索。",
+    description: "Use cloud probe benchmark to stress strategy selection under tougher mix.",
     patch: {
       benchmarkPath: "examples/generated/cloud_probe/benchmark_manifest.json",
       searchSpacePath: "examples/research_search_space.json",
@@ -185,20 +205,20 @@ const RUN_PRESETS: RunPreset[] = [
     recommendedKind: "research",
   },
   {
-    id: "sample-solve",
-    label: "样例 Solve",
-    description: "对单个样例实例直接出解，适合检查 submission 和验证流程。",
+    id: "sample-closed-loop",
+    label: "Sample Closed Loop",
+    description: "One-click solve, validate, and submission snapshot on sample instance.",
     patch: {
       instancePath: "examples/instances/sample_instance.json",
       timeBudgetMs: 10_000,
       seed: 0,
     },
-    recommendedKind: "solve",
+    recommendedKind: "solve-submit",
   },
   {
     id: "quick-smoke",
-    label: "快速 Smoke",
-    description: "一键跑合成 benchmark、research、validate 和 replay，适合演示闭环。",
+    label: "Quick Smoke",
+    description: "Fast end-to-end loop for sanity checks before deeper experiments.",
     patch: {
       rounds: 1,
       timeBudgetMs: 500,
@@ -223,16 +243,16 @@ const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
 });
 
 function formatCount(value: number | null | undefined): string {
-  return typeof value === "number" ? countFormatter.format(value) : "暂无";
+  return typeof value === "number" ? countFormatter.format(value) : "N/A";
 }
 
 function formatInteger(value: number | null | undefined): string {
-  return typeof value === "number" ? integerFormatter.format(value) : "暂无";
+  return typeof value === "number" ? integerFormatter.format(value) : "N/A";
 }
 
 function formatTimestamp(value: string | null | undefined): string {
   if (!value) {
-    return "暂无";
+    return "N/A";
   }
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : timeFormatter.format(parsed);
@@ -255,7 +275,59 @@ function asBoolean(value: unknown): boolean | null {
 }
 
 function asStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.map((item) => String(item)) : [];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item) => String(item)).filter((item) => item.trim().length > 0);
+}
+
+function sanitizeRunDraft(value: Partial<RunDraft>): RunDraft {
+  return {
+    benchmarkPath: typeof value.benchmarkPath === "string" ? value.benchmarkPath : DEFAULT_RUN_DRAFT.benchmarkPath,
+    instancePath: typeof value.instancePath === "string" ? value.instancePath : DEFAULT_RUN_DRAFT.instancePath,
+    searchSpacePath: typeof value.searchSpacePath === "string" ? value.searchSpacePath : DEFAULT_RUN_DRAFT.searchSpacePath,
+    rounds:
+      typeof value.rounds === "number" && Number.isFinite(value.rounds)
+        ? Math.max(1, Math.min(12, Math.round(value.rounds)))
+        : DEFAULT_RUN_DRAFT.rounds,
+    timeBudgetMs:
+      typeof value.timeBudgetMs === "number" && Number.isFinite(value.timeBudgetMs)
+        ? Math.max(100, Math.round(value.timeBudgetMs))
+        : DEFAULT_RUN_DRAFT.timeBudgetMs,
+    seed:
+      typeof value.seed === "number" && Number.isFinite(value.seed) ? Math.max(0, Math.round(value.seed)) : DEFAULT_RUN_DRAFT.seed,
+    allowRuleBasedFallback:
+      typeof value.allowRuleBasedFallback === "boolean" ? value.allowRuleBasedFallback : DEFAULT_RUN_DRAFT.allowRuleBasedFallback,
+  };
+}
+
+function loadStoredRunDraft(): RunDraft {
+  try {
+    const raw = window.localStorage.getItem(RUN_DRAFT_STORAGE_KEY);
+    if (!raw) {
+      return DEFAULT_RUN_DRAFT;
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) {
+      return DEFAULT_RUN_DRAFT;
+    }
+    return sanitizeRunDraft(parsed as Partial<RunDraft>);
+  } catch {
+    return DEFAULT_RUN_DRAFT;
+  }
+}
+
+function loadStoredPlaybackSpeed(): number {
+  try {
+    const raw = window.localStorage.getItem(PLAYBACK_SPEED_STORAGE_KEY);
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      return 1200;
+    }
+    return Math.max(300, Math.min(1800, parsed));
+  } catch {
+    return 1200;
+  }
 }
 
 function summarizeConfig(config: Record<string, unknown> | null): string[] {
@@ -264,76 +336,150 @@ function summarizeConfig(config: Record<string, unknown> | null): string[] {
   }
 
   return [
-    `Top-K ${String(config.top_k_riders_per_order ?? "暂无")}`,
-    `CP-SAT ${config.use_cpsat === false ? "关闭" : "开启"}`,
-    `补合单 ${config.generate_bundles_if_missing === false ? "关闭" : "开启"}`,
-    `合单池 ${String(config.bundle_candidate_pool_size ?? "暂无")}`,
-    `LNS ${String(config.lns_iterations ?? "暂无")} 次`,
+    `top_k=${String(config["top_k_riders_per_order"] ?? "N/A")}`,
+    `cpsat=${config["use_cpsat"] === false ? "off" : "on"}`,
+    `lns=${config["use_lns"] === false ? "off" : "on"}`,
+    `bundle_gen=${config["generate_bundles_if_missing"] === false ? "off" : "on"}`,
+    `bundle_pool=${String(config["bundle_candidate_pool_size"] ?? "N/A")}`,
+    `lns_iter=${String(config["lns_iterations"] ?? "N/A")}`,
   ];
 }
 
-function extractExperimentId(event: ReplayEvent): string | null {
-  return asString(event.payload.experiment_id);
-}
-
-function extractRoundIndex(event: ReplayEvent): number | null {
-  return asNumber(event.payload.round_index);
-}
-
 function formatStatus(status: string | null | undefined): string {
+  if (!status) {
+    return "Unknown";
+  }
   if (status === "keep") {
-    return "保留";
+    return "Keep";
   }
   if (status === "discard") {
-    return "淘汰";
+    return "Discard";
   }
   if (status === "crash") {
-    return "失败";
+    return "Crash";
   }
   if (status === "pending") {
-    return "进行中";
+    return "Pending";
+  }
+  if (status === CONTROL_JOB_STATUS.QUEUED) {
+    return "Queued";
   }
   if (status === CONTROL_JOB_STATUS.RUNNING) {
-    return "运行中";
+    return "Running";
   }
   if (status === CONTROL_JOB_STATUS.CANCELLING) {
-    return "停止中";
+    return "Cancelling";
   }
   if (status === CONTROL_JOB_STATUS.SUCCEEDED) {
-    return "已完成";
+    return "Succeeded";
   }
   if (status === CONTROL_JOB_STATUS.FAILED) {
-    return "失败";
+    return "Failed";
   }
   if (status === CONTROL_JOB_STATUS.CANCELLED) {
-    return "已停止";
+    return "Cancelled";
   }
-  return status ?? "未知";
+  return status;
+}
+
+function toStatusClass(status: string | null | undefined): string {
+  if (!status) {
+    return "unknown";
+  }
+  return status.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+}
+
+function canCancelControlJob(job: ControlJob | null): boolean {
+  if (!job) {
+    return false;
+  }
+  return job.status === CONTROL_JOB_STATUS.RUNNING || job.status === CONTROL_JOB_STATUS.QUEUED || job.status === CONTROL_JOB_STATUS.CANCELLING;
 }
 
 function formatProposalType(value: string): string {
   if (value === "llm") {
-    return "LLM 提案";
+    return "LLM";
   }
   if (value === "fallback") {
-    return "回退提案";
+    return "Fallback";
   }
-  return "未知提案";
+  return "Unknown";
 }
 
-function isBundledReplaySource(sourceLabel: string): boolean {
+function toProposalClass(value: string): string {
+  if (value === "llm") {
+    return "llm";
+  }
+  if (value === "fallback") {
+    return "fallback";
+  }
+  return "fallback";
+}
+
+function formatRunKind(kind: ControlRunKind | string): string {
+  if (kind === "pytest") {
+    return "Pytest";
+  }
+  if (kind === "smoke") {
+    return "Smoke";
+  }
+  if (kind === "research") {
+    return "Research";
+  }
+  if (kind === "benchmark") {
+    return "Benchmark";
+  }
+  if (kind === "solve") {
+    return "Solve";
+  }
+  if (kind === "solve-validate") {
+    return "Solve + Validate";
+  }
+  if (kind === "solve-submit") {
+    return "Solve + Submit";
+  }
+  return kind;
+}
+
+function isLiveReplaySource(sourceLabel: string): boolean {
   return sourceLabel === LIVE_REPLAY_SOURCE_LABEL;
+}
+
+function errorToMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function readApiError(payload: unknown, fallback: string): string {
+  if (!isRecord(payload)) {
+    return fallback;
+  }
+  return asString(payload.error) ?? fallback;
+}
+
+function parseControlStateFromEnvelope(payload: unknown): ControlState {
+  if (isControlState(payload)) {
+    return payload;
+  }
+  if (isRecord(payload) && isControlState(payload.state)) {
+    return payload.state;
+  }
+  throw new Error("Control API response schema is invalid.");
+}
+
+function shouldTreatAsReplayArtifact(label: string, path: string): boolean {
+  const merged = `${label} ${path}`.toLowerCase();
+  return merged.includes("replay") && path.toLowerCase().endsWith(".json");
 }
 
 async function loadReplayPayload(filename: string): Promise<ReplayData> {
   const replayUrl = `${import.meta.env.BASE_URL}${filename}?ts=${Date.now()}`;
   const response = await fetch(replayUrl, { cache: "no-store" });
   if (!response.ok) {
-    throw new Error(`加载 ${filename} 失败：${response.status} ${response.statusText}`);
+    throw new Error(`Failed to load ${filename}: ${response.status} ${response.statusText}`);
   }
   const payload: unknown = await response.json();
   if (!isReplayData(payload)) {
-    throw new Error(`${filename} 不是合法的 replay JSON。`);
+    throw new Error(`${filename} is not a valid replay JSON payload.`);
   }
   return payload;
 }
@@ -341,16 +487,13 @@ async function loadReplayPayload(filename: string): Promise<ReplayData> {
 async function loadControlSnapshot(): Promise<ControlState> {
   const response = await fetch(`${CONTROL_API_BASE}/api/control/status?ts=${Date.now()}`, { cache: "no-store" });
   if (!response.ok) {
-    throw new Error(`控制台状态加载失败：${response.status} ${response.statusText}`);
+    throw new Error(`Failed to load control state: ${response.status} ${response.statusText}`);
   }
   const payload: unknown = await response.json();
-  if (!isControlState(payload)) {
-    throw new Error("控制台状态返回的 JSON 结构不合法。");
-  }
-  return payload;
+  return parseControlStateFromEnvelope(payload);
 }
 
-async function runControlJob(kind: "pytest" | "smoke" | "research" | "benchmark" | "solve", draft: RunDraft): Promise<ControlState> {
+async function runControlJob(kind: ControlRunKind, draft: RunDraft): Promise<ControlState> {
   const response = await fetch(`${CONTROL_API_BASE}/api/control/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -366,42 +509,49 @@ async function runControlJob(kind: "pytest" | "smoke" | "research" | "benchmark"
     }),
   });
 
-  const payload: unknown = await response.json();
-  if (!isRecord(payload)) {
-    throw new Error("控制台启动任务失败，返回结果不可解析。");
-  }
-  const state = payload.state;
-  if (!isControlState(state)) {
-    throw new Error("控制台启动任务失败，状态结构不合法。");
-  }
+  const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(asString(payload.error) ?? "控制台拒绝了这次启动请求。");
+    throw new Error(readApiError(payload, "Control API rejected this run request."));
   }
-  return state;
+  return parseControlStateFromEnvelope(payload);
 }
 
 async function cancelControlJob(jobId: string): Promise<ControlState> {
   const response = await fetch(`${CONTROL_API_BASE}/api/control/jobs/${jobId}/cancel`, {
     method: "POST",
   });
-  const payload: unknown = await response.json();
-  if (!isRecord(payload)) {
-    throw new Error("取消任务失败，返回结果不可解析。");
-  }
-  const state = payload.state;
-  if (!isControlState(state)) {
-    throw new Error("取消任务失败，状态结构不合法。");
-  }
+  const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(asString(payload.error) ?? "控制台拒绝了取消请求。");
+    throw new Error(readApiError(payload, "Control API rejected this cancel request."));
   }
-  return state;
+  return parseControlStateFromEnvelope(payload);
+}
+
+async function uploadControlFile(target: UploadTarget, file: File): Promise<string> {
+  const response = await fetch(`${CONTROL_API_BASE}/api/control/upload`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      target,
+      filename: file.name,
+      content: await file.text(),
+    }),
+  });
+
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(readApiError(payload, "Failed to upload file to control API."));
+  }
+  if (!isRecord(payload) || typeof payload.path !== "string") {
+    throw new Error("Upload succeeded but response path is missing.");
+  }
+  return payload.path;
 }
 
 async function loadControlArtifactText(path: string): Promise<{ body: string; contentType: string }> {
   const response = await fetch(`${CONTROL_API_BASE}/api/control/file?path=${encodeURIComponent(path)}`, { cache: "no-store" });
   if (!response.ok) {
-    throw new Error(`加载产物失败：${response.status} ${response.statusText}`);
+    throw new Error(`Failed to load artifact: ${response.status} ${response.statusText}`);
   }
   return {
     body: await response.text(),
@@ -412,80 +562,81 @@ async function loadControlArtifactText(path: string): Promise<{ body: string; co
 function buildStoryBeats(events: ReplayEvent[]): StoryBeat[] {
   const beats: StoryBeat[] = [];
 
-  for (const event of events) {
+  events.forEach((event, index) => {
     const payload = isRecord(event.payload) ? event.payload : {};
-    const experimentId = extractExperimentId(event);
-    const roundIndex = extractRoundIndex(event);
+    const experimentId = asString(payload.experiment_id);
+    const roundIndex = asNumber(payload.round_index);
 
     if (event.type === EVENT_TYPES.RESEARCH_SESSION_STARTED) {
-      const benchmarkId = asString(event.payload.benchmark_id) ?? "当前基准集";
-      const provider = asString(event.payload.provider) ?? "未知模型";
-      const llmEnabled = asBoolean(event.payload.llm_enabled);
+      const benchmarkId = asString(payload.benchmark_id) ?? "unknown-benchmark";
+      const provider = asString(payload.provider) ?? "unknown-provider";
+      const llmEnabled = asBoolean(payload.llm_enabled);
       beats.push({
-        id: `${event.ts}-${event.type}`,
+        id: `${event.ts}-${event.type}-${index}`,
         ts: event.ts,
         type: event.type,
         tone: "system",
-        label: "系统",
-        title: "Agent 接到新的配送优化任务",
-        body: `系统已载入 ${benchmarkId}，现在开始自主探索更好的分配策略。接下来你会看到它如何提案、调用工具、评估结果，再自己修改方向。`,
-        meta: [provider, llmEnabled ? "LLM 已启用" : "当前为离线回退模式"],
+        label: "System",
+        title: "Research Session Started",
+        body: `Session opened on benchmark ${benchmarkId}. The agent will now iterate on strategies and validate outcomes.`,
+        meta: [provider, llmEnabled ? "LLM enabled" : "Fallback mode"],
         experimentId,
         roundIndex,
         payload,
       });
-      continue;
+      return;
     }
 
     if (event.type === EVENT_TYPES.RESEARCH_SESSION_RESUMED) {
       beats.push({
-        id: `${event.ts}-${event.type}`,
+        id: `${event.ts}-${event.type}-${index}`,
         ts: event.ts,
         type: event.type,
         tone: "system",
-        label: "系统",
-        title: "继续上一次会话",
-        body: "系统不是从零开始，而是带着已有经验和状态继续往前跑。",
-        meta: [asString(event.payload.state_path) ?? "已恢复历史状态"],
+        label: "System",
+        title: "Session Resumed",
+        body: "Previous state was restored. New rounds continue from prior research memory.",
+        meta: [asString(payload.state_path) ?? "state_path unavailable"],
         experimentId,
         roundIndex,
         payload,
       });
-      continue;
+      return;
     }
 
     if (event.type === EVENT_TYPES.RESEARCH_LLM_PROPOSAL || event.type === EVENT_TYPES.RESEARCH_FALLBACK_PROPOSAL) {
+      const isLlm = event.type === EVENT_TYPES.RESEARCH_LLM_PROPOSAL;
       beats.push({
-        id: `${event.ts}-${event.type}`,
+        id: `${event.ts}-${event.type}-${index}`,
         ts: event.ts,
         type: event.type,
         tone: "agent",
-        label: event.type === EVENT_TYPES.RESEARCH_LLM_PROPOSAL ? "Agent" : "回退策略",
-        title: event.type === EVENT_TYPES.RESEARCH_LLM_PROPOSAL ? "我准备试一组新策略" : "切回保底提案继续搜索",
-        body: asString(event.payload.hypothesis) ?? "这一轮没有留下可展示的假设说明。",
-        meta: summarizeConfig(isRecord(event.payload.solver_config) ? event.payload.solver_config : null),
+        label: isLlm ? "Agent" : "Fallback",
+        title: isLlm ? "New Strategy Proposal" : "Fallback Strategy Proposal",
+        body: asString(payload.hypothesis) ?? "No hypothesis recorded for this proposal.",
+        meta: summarizeConfig(isRecord(payload.solver_config) ? payload.solver_config : null),
         experimentId,
         roundIndex,
         payload,
       });
-      continue;
+      return;
     }
 
     if (event.type === EVENT_TYPES.RESEARCH_ROUND_STARTED) {
       beats.push({
-        id: `${event.ts}-${event.type}`,
+        id: `${event.ts}-${event.type}-${index}`,
         ts: event.ts,
         type: event.type,
         tone: "tool",
-        label: "工具",
-        title: "本地求解器开始执行",
-        body: "Agent 已把这组参数交给本地 solver。现在它会真正去跑 benchmark，而不是只停留在口头推理。",
-        meta: summarizeConfig(isRecord(event.payload.solver_config) ? event.payload.solver_config : null),
+        label: "Tool",
+        title: "Round Execution Started",
+        body: "Local solver is running this proposal over benchmark cases.",
+        meta: summarizeConfig(isRecord(payload.solver_config) ? payload.solver_config : null),
         experimentId,
         roundIndex,
         payload,
       });
-      continue;
+      return;
     }
 
     if (event.type === EVENT_TYPES.BENCHMARK_CASE_COMPLETED) {
@@ -494,127 +645,145 @@ function buildStoryBeats(events: ReplayEvent[]): StoryBeat[] {
       const strategy = asString(stats?.strategy) ?? "portfolio";
       const candidateCount = asNumber(stats?.candidate_option_count);
       const bundleCount = asNumber(candidateBreakdown?.bundle);
+      const caseId = asString(payload.case_id) ?? "unknown-case";
       beats.push({
-        id: `${event.ts}-${event.type}-${asString(event.payload.case_id) ?? "case"}`,
+        id: `${event.ts}-${event.type}-${index}-${caseId}`,
         ts: event.ts,
         type: event.type,
         tone: "tool",
-        label: "工具回传",
-        title: `${asString(event.payload.case_id) ?? "样例"} 已完成`,
-        body: `这一个样例的结果已经算出来了：预计完单 ${formatCount(event.payload.expected_completed_orders)}，总成本 ${formatCount(event.payload.total_cost)}，耗时 ${formatInteger(event.payload.elapsed_ms)} ms。`,
+        label: "Tool Result",
+        title: `Case Completed: ${caseId}`,
+        body: `expected=${formatCount(payload.expected_completed_orders as number | null)}, cost=${formatCount(payload.total_cost as number | null)}, elapsed=${formatInteger(payload.elapsed_ms as number | null)} ms`,
         meta: [
-          `求解策略 ${strategy}`,
-          candidateCount !== null ? `候选池 ${formatInteger(candidateCount)}` : "候选池 暂无",
-          bundleCount !== null ? `合单候选 ${formatInteger(bundleCount)}` : "合单候选 暂无",
+          `strategy=${strategy}`,
+          candidateCount !== null ? `candidates=${formatInteger(candidateCount)}` : "candidates=N/A",
+          bundleCount !== null ? `bundle_candidates=${formatInteger(bundleCount)}` : "bundle_candidates=N/A",
         ],
         experimentId,
         roundIndex,
         payload,
       });
-      continue;
+      return;
     }
 
     if (event.type === EVENT_TYPES.BENCHMARK_COMPLETED) {
       beats.push({
-        id: `${event.ts}-${event.type}`,
-        ts: event.ts,
-        type: event.type,
-        tone: "judge",
-        label: "结果汇总",
-        title: "这一轮 benchmark 已跑完",
-        body: `系统把所有样例汇总后发现：这轮的加权平均预计完单是 ${formatCount(event.payload.average_expected_completed_orders)}，平均成本是 ${formatCount(event.payload.average_total_cost)}。`,
-        meta: [`总耗时 ${formatInteger(event.payload.total_elapsed_ms)} ms`, `样例数 ${formatInteger(event.payload.case_count)}`],
-        experimentId,
-        roundIndex,
-        payload,
-      });
-      continue;
-    }
-
-    if (event.type === EVENT_TYPES.RESEARCH_ROUND_COMPLETED) {
-      const status = asString(event.payload.status);
-      beats.push({
-        id: `${event.ts}-${event.type}`,
+        id: `${event.ts}-${event.type}-${index}`,
         ts: event.ts,
         type: event.type,
         tone: "judge",
         label: "Judge",
-        title: `自动判定：${formatStatus(status)}`,
-        body:
-          status === "keep"
-            ? "这一轮打赢了当前最优解，所以系统会把它保留下来，作为后面继续探索的新锚点。"
-            : status === "discard"
-              ? "这一轮没有打赢当前最优解，所以会被淘汰，但系统仍会记住它失败的原因。"
-              : "这一轮执行异常。系统会记录失败模式，然后换条路继续往前试。",
+        title: "Benchmark Round Aggregated",
+        body: `avg_expected=${formatCount(payload.average_expected_completed_orders as number | null)}, avg_cost=${formatCount(payload.average_total_cost as number | null)}`,
         meta: [
-          `预计完单 ${formatCount(event.payload.average_expected_completed_orders)}`,
-          `总成本 ${formatCount(event.payload.average_total_cost)}`,
-          `耗时 ${formatInteger(event.payload.total_elapsed_ms)} ms`,
+          `elapsed=${formatInteger(payload.total_elapsed_ms as number | null)} ms`,
+          `cases=${formatInteger(payload.case_count as number | null)}`,
         ],
         experimentId,
         roundIndex,
         payload,
       });
-      continue;
+      return;
+    }
+
+    if (event.type === EVENT_TYPES.RESEARCH_ROUND_COMPLETED) {
+      const status = asString(payload.status);
+      const detail =
+        status === "keep"
+          ? "Round improved incumbent and was kept."
+          : status === "discard"
+            ? "Round did not beat incumbent and was discarded."
+            : "Round completed with a non-standard status.";
+      beats.push({
+        id: `${event.ts}-${event.type}-${index}`,
+        ts: event.ts,
+        type: event.type,
+        tone: "judge",
+        label: "Judge",
+        title: `Round Completed: ${formatStatus(status)}`,
+        body: detail,
+        meta: [
+          `expected=${formatCount(payload.average_expected_completed_orders as number | null)}`,
+          `cost=${formatCount(payload.average_total_cost as number | null)}`,
+          `elapsed=${formatInteger(payload.total_elapsed_ms as number | null)} ms`,
+        ],
+        experimentId,
+        roundIndex,
+        payload,
+      });
+      return;
     }
 
     if (event.type === EVENT_TYPES.RESEARCH_INCUMBENT_UPDATED) {
       beats.push({
-        id: `${event.ts}-${event.type}`,
+        id: `${event.ts}-${event.type}-${index}`,
         ts: event.ts,
         type: event.type,
         tone: "system",
-        label: "系统更新",
-        title: "当前最优方案被刷新",
-        body: `现在的 incumbent 已经切换成 ${experimentId ?? "新的实验"}。后面的提案会围绕它继续做更精细的尝试。`,
+        label: "System",
+        title: "Incumbent Updated",
+        body: `New incumbent is ${experimentId ?? "unknown experiment"} with better objective performance.`,
         meta: [
-          `预计完单 ${formatCount(event.payload.average_expected_completed_orders)}`,
-          `总成本 ${formatCount(event.payload.average_total_cost)}`,
+          `expected=${formatCount(payload.average_expected_completed_orders as number | null)}`,
+          `cost=${formatCount(payload.average_total_cost as number | null)}`,
         ],
         experimentId,
         roundIndex,
         payload,
       });
-      continue;
+      return;
     }
 
     if (event.type === EVENT_TYPES.RESEARCH_LLM_REFLECTION || event.type === EVENT_TYPES.RESEARCH_HEURISTIC_REFLECTION) {
-      const nextFocus = asStringArray(event.payload.next_focus);
+      const nextFocus = asStringArray(payload.next_focus);
+      const keepReason = asString(payload.keep_reason);
       beats.push({
-        id: `${event.ts}-${event.type}`,
+        id: `${event.ts}-${event.type}-${index}`,
         ts: event.ts,
         type: event.type,
         tone: "agent",
-        label: event.type === EVENT_TYPES.RESEARCH_LLM_REFLECTION ? "Agent 复盘" : "启发式复盘",
-        title: "我来复盘这一轮，并决定下一步",
-        body: asString(event.payload.summary) ?? "这一轮没有留下可展示的复盘摘要。",
-        meta: [
-          ...(asString(event.payload.keep_reason) ? [asString(event.payload.keep_reason) ?? ""] : []),
-          ...nextFocus.slice(0, 2),
-        ].filter(Boolean),
+        label: event.type === EVENT_TYPES.RESEARCH_LLM_REFLECTION ? "Agent Reflection" : "Heuristic Reflection",
+        title: "Reflection for Next Iteration",
+        body: asString(payload.summary) ?? "No reflection summary was recorded.",
+        meta: [...(keepReason ? [keepReason] : []), ...nextFocus.slice(0, 2)],
         experimentId,
         roundIndex,
         payload,
       });
-      continue;
+      return;
     }
 
     if (event.type === EVENT_TYPES.RESEARCH_ROUND_FAILED) {
       beats.push({
-        id: `${event.ts}-${event.type}`,
+        id: `${event.ts}-${event.type}-${index}`,
         ts: event.ts,
         type: event.type,
         tone: "judge",
-        label: "异常处理",
-        title: "这一轮执行失败",
-        body: asString(event.payload.error) ?? "出现了未记录的执行错误。",
-        meta: ["失败不会终止会话，系统会吸收这次经验继续搜索。"],
+        label: "Failure",
+        title: "Round Failed",
+        body: asString(payload.error) ?? "Round failed with unknown error.",
+        meta: ["Failure is logged and the session can continue with another proposal."],
         experimentId,
         roundIndex,
         payload,
       });
+      return;
     }
-  }
+
+    beats.push({
+      id: `${event.ts}-${event.type}-${index}`,
+      ts: event.ts,
+      type: event.type,
+      tone: "tool",
+      label: "Event",
+      title: event.type,
+      body: "Event was recorded but has no dedicated story card mapping.",
+      meta: [],
+      experimentId,
+      roundIndex,
+      payload,
+    });
+  });
 
   return beats;
 }
@@ -626,17 +795,14 @@ function selectBestRound(rounds: RoundInsight[]): RoundInsight | null {
     if (typeof round.averageExpectedCompletedOrders !== "number" || typeof round.averageTotalCost !== "number") {
       continue;
     }
-
     if (bestRound === null) {
       bestRound = round;
       continue;
     }
-
     if ((round.averageExpectedCompletedOrders ?? 0) > (bestRound.averageExpectedCompletedOrders ?? 0)) {
       bestRound = round;
       continue;
     }
-
     if (
       round.averageExpectedCompletedOrders === bestRound.averageExpectedCompletedOrders &&
       (round.averageTotalCost ?? Number.POSITIVE_INFINITY) < (bestRound.averageTotalCost ?? Number.POSITIVE_INFINITY)
@@ -644,17 +810,12 @@ function selectBestRound(rounds: RoundInsight[]): RoundInsight | null {
       bestRound = round;
     }
   }
-
   return bestRound;
 }
 
 function buildChartPoints(rounds: RoundInsight[]): { x: number; expected: number; cost: number }[] {
   return rounds
-    .filter(
-      (round) =>
-        typeof round.averageExpectedCompletedOrders === "number" &&
-        typeof round.averageTotalCost === "number",
-    )
+    .filter((round) => typeof round.averageExpectedCompletedOrders === "number" && typeof round.averageTotalCost === "number")
     .map((round, index) => ({
       x: index,
       expected: round.averageExpectedCompletedOrders ?? 0,
@@ -662,7 +823,7 @@ function buildChartPoints(rounds: RoundInsight[]): { x: number; expected: number
     }));
 }
 
-function useTypedText(text: string, active: boolean) {
+function useTypedText(text: string, active: boolean): string {
   const [visibleLength, setVisibleLength] = useState(active ? 0 : text.length);
 
   useEffect(() => {
@@ -672,15 +833,16 @@ function useTypedText(text: string, active: boolean) {
     }
 
     setVisibleLength(0);
+    const step = Math.max(3, Math.ceil(text.length / 42));
     const timerId = window.setInterval(() => {
       setVisibleLength((current) => {
         if (current >= text.length) {
           window.clearInterval(timerId);
           return text.length;
         }
-        return current + 2;
+        return Math.min(text.length, current + step);
       });
-    }, 18);
+    }, 24);
 
     return () => {
       window.clearInterval(timerId);
@@ -707,35 +869,43 @@ function ControlBar({
   autoRefreshEnabled,
   lastReloadedAt,
   onLoadLocalReplay,
-  onUseBundledReplay,
+  onUseDemoReplay,
+  onReloadLiveReplay,
+  onToggleAutoRefresh,
 }: ControlBarProps) {
   return (
     <section className="control-bar">
       <div className="control-copy">
-        <p className="section-eyebrow">数据来源</p>
+        <p className="section-eyebrow">Replay Source</p>
         <strong className="control-source" translate="no">
           {sourceLabel}
         </strong>
         <p className="control-meta">
-          基准集：<span translate="no">{benchmarkId ?? "暂无"}</span>
+          Benchmark: <span translate="no">{benchmarkId ?? "N/A"}</span>
           <span className="control-sep" aria-hidden="true">
             /
           </span>
-          模型：<span translate="no">{provider}</span>
+          Provider: <span translate="no">{provider}</span>
         </p>
         <div className="live-row">
           <span className={`live-pill ${autoRefreshEnabled ? "live-active" : "live-static"}`}>
-            {autoRefreshEnabled ? "正在自动刷新" : "当前为静态快照"}
+            {autoRefreshEnabled ? "Auto refresh on" : "Auto refresh off"}
           </span>
-          <span className="live-time">最近同步：{formatTimestamp(lastReloadedAt)}</span>
+          <span className="live-time">Last sync: {formatTimestamp(lastReloadedAt)}</span>
         </div>
       </div>
       <div className="control-actions">
-        <button className="ghost-button" type="button" onClick={onUseBundledReplay}>
-          重新读取默认回放
+        <button className="ghost-button" type="button" onClick={onReloadLiveReplay}>
+          Reload Live
+        </button>
+        <button className="ghost-button" type="button" onClick={onUseDemoReplay}>
+          Use Demo Replay
+        </button>
+        <button className="ghost-button" type="button" onClick={onToggleAutoRefresh}>
+          {autoRefreshEnabled ? "Pause Auto Refresh" : "Resume Auto Refresh"}
         </button>
         <label className="primary-button upload-button">
-          上传本地 JSON
+          Upload Replay JSON
           <input className="upload-input" type="file" accept="application/json,.json" onChange={onLoadLocalReplay} />
         </label>
       </div>
@@ -755,50 +925,51 @@ function PlaybackControls({
   onShowAll,
   onSpeedChange,
 }: PlaybackControlsProps) {
-  const shownCount = visibleBeats === 0 ? totalBeats : visibleBeats;
+  const shownCount = visibleBeats <= 0 ? totalBeats : Math.min(visibleBeats, totalBeats);
   const progress = totalBeats === 0 ? 0 : (shownCount / totalBeats) * 100;
 
   return (
     <section className="playback-panel">
       <div className="playback-copy">
-        <p className="section-eyebrow">动画演示</p>
-        <h2>像看 Agent 会话直播一样，看见每一次思考和工具调用</h2>
+        <p className="section-eyebrow">Playback</p>
+        <h2>Follow The Agent Session As A Playable Story</h2>
         <p className="section-text">
-          参考你给的 Kaggle Agent Session 示例，这里把主舞台改成了“会话播放器”。播放时会一条条生成气泡，
-          当前步骤会高亮、逐字出现，工具调用还能点开看结构化细节。
+          Use playback mode to reveal proposals, solver runs, benchmark outcomes, and reflection decisions in order.
         </p>
         <div className="progress-track" aria-hidden="true">
           <div className="progress-fill" style={{ width: `${progress}%` }} />
         </div>
         <div className="progress-meta">
-          <span className="meta-chip">总步骤 {formatInteger(totalBeats)}</span>
-          <span className="meta-chip">已展示 {formatInteger(shownCount)}</span>
-          <span className="meta-chip">{isPlaying ? "正在播放" : isFinished ? "播放完成" : visibleBeats > 0 ? "已暂停" : "完整视图"}</span>
+          <span className="meta-chip">Total beats {formatInteger(totalBeats)}</span>
+          <span className="meta-chip">Shown {formatInteger(shownCount)}</span>
+          <span className="meta-chip">
+            {isPlaying ? "Playing" : isFinished ? "Finished" : visibleBeats > 0 ? "Paused" : "Full view"}
+          </span>
         </div>
       </div>
       <div className="playback-actions">
         <div className="button-row">
           <button className="primary-button" type="button" onClick={onStartPlayback} disabled={totalBeats === 0}>
-            开始演示
+            Start Playback
           </button>
           <button className="ghost-button" type="button" onClick={onTogglePlayback} disabled={totalBeats === 0}>
-            {isPlaying ? "暂停" : visibleBeats > 0 ? "继续" : "从头播放"}
+            {isPlaying ? "Pause" : visibleBeats > 0 ? "Resume" : "Play From Start"}
           </button>
         </div>
         <div className="button-row">
           <button className="ghost-button" type="button" onClick={onResetPlayback} disabled={totalBeats === 0}>
-            清空动画
+            Clear Animation
           </button>
           <button className="ghost-button" type="button" onClick={onShowAll} disabled={totalBeats === 0}>
-            直接看全量
+            Show All At Once
           </button>
         </div>
         <label className="speed-box">
-          播放节奏
+          Playback speed
           <select value={String(speedMs)} onChange={onSpeedChange}>
-            <option value="700">快</option>
-            <option value="1200">中</option>
-            <option value="1800">慢</option>
+            <option value="700">Fast</option>
+            <option value="1200">Normal</option>
+            <option value="1800">Slow</option>
           </select>
         </label>
       </div>
@@ -809,6 +980,7 @@ function PlaybackControls({
 function ControlConsole({
   controlState,
   controlError,
+  controlNotice,
   isLaunching,
   draft,
   presets,
@@ -817,6 +989,7 @@ function ControlConsole({
   artifactPreviewError,
   onDraftChange,
   onApplyPreset,
+  onUploadFile,
   onRun,
   onCancel,
   onRefresh,
@@ -824,83 +997,101 @@ function ControlConsole({
   onLoadReplayArtifact,
 }: ControlConsoleProps) {
   const currentJob = controlState?.currentJob ?? null;
-  const isBusy =
-    currentJob?.status === CONTROL_JOB_STATUS.RUNNING || currentJob?.status === CONTROL_JOB_STATUS.CANCELLING;
+  const queuedJobs = controlState?.queuedJobs ?? [];
   const recentJobs = controlState?.recentJobs ?? [];
+  const queuedJobIds = new Set(queuedJobs.map((job) => job.jobId));
+  const historyJobs = recentJobs.filter((job) => job.jobId !== currentJob?.jobId && !queuedJobIds.has(job.jobId));
   const previewVisible = Boolean(artifactPreviewPath || artifactPreviewError);
+  const canLaunchJobs = Boolean(controlState) && !isLaunching;
 
   return (
     <section className="panel control-console-panel">
       <div className="panel-head">
-        <p className="section-eyebrow">网页控制台</p>
-        <h2>直接从网页触发本地测试、研究和求解</h2>
+        <p className="section-eyebrow">Web Control Console</p>
+        <h2>Run Pytest, Research, Solve, And Submission Flows From The Browser</h2>
       </div>
 
       <div className="control-console-grid">
         <div className="control-console-copy">
           <p className="section-text">
-            这个面板会连接本机的 `autosolver-web` 控制服务。连接成功后，你可以不离开网页，直接发起 `pytest`、
-            `smoke`、`research`、`benchmark` 和 `solve`，并且实时看到命令、状态和日志。
+            This panel talks to local <code>autosolver-web</code>. You can queue runs, inspect artifacts, and load replay outputs without switching to terminal.
           </p>
           <div className="hero-chips">
-            <span className={`meta-chip ${controlState ? "" : "meta-chip-muted"}`}>{controlState ? "本地控制服务已连接" : "控制服务未连接"}</span>
+            <span className={`meta-chip ${controlState ? "" : "meta-chip-muted"}`}>{controlState ? "Control API connected" : "Control API unavailable"}</span>
             <span className="meta-chip">API {controlState?.apiBase ?? CONTROL_API_BASE}</span>
-            <span className="meta-chip">{controlState?.provider.llmConfigured ? "LLM 已配置" : "当前可能只能跑 fallback"}</span>
+            <span className="meta-chip">{controlState?.provider.llmConfigured ? "LLM configured" : "LLM not configured"}</span>
           </div>
         </div>
 
         <div className="control-console-fields">
           <div className="control-preset-block">
-            <span>任务预设</span>
+            <span>Run Presets</span>
             <div className="preset-grid">
               {presets.map((preset) => (
                 <button className="preset-card" key={preset.id} type="button" onClick={() => onApplyPreset(preset)}>
                   <strong>{preset.label}</strong>
                   <p>{preset.description}</p>
-                  <span className="config-chip">推荐动作 {preset.recommendedKind.toUpperCase()}</span>
+                  <span className="config-chip">Recommended: {formatRunKind(preset.recommendedKind)}</span>
                 </button>
               ))}
             </div>
           </div>
+
           <label className="control-field">
-            <span>Benchmark 路径</span>
+            <span>Benchmark Path</span>
             <input
               type="text"
               value={draft.benchmarkPath}
               onChange={(event) => onDraftChange({ benchmarkPath: event.target.value })}
               placeholder="examples/benchmarks/benchmark_manifest.json"
             />
+            <div className="control-field-actions">
+              <label className="ghost-button upload-inline-button">
+                Upload benchmark / manifest
+                <input className="upload-input" type="file" accept=".json,.jsonl,.txt" onChange={(event) => onUploadFile("benchmark", event)} />
+              </label>
+            </div>
           </label>
+
           <label className="control-field">
-            <span>实例路径</span>
+            <span>Instance Path</span>
             <input
               type="text"
               value={draft.instancePath}
               onChange={(event) => onDraftChange({ instancePath: event.target.value })}
               placeholder="examples/instances/sample_instance.json"
             />
+            <div className="control-field-actions">
+              <label className="ghost-button upload-inline-button">
+                Upload instance JSON
+                <input className="upload-input" type="file" accept=".json,.jsonl,.txt" onChange={(event) => onUploadFile("instance", event)} />
+              </label>
+            </div>
           </label>
+
           <label className="control-field">
-            <span>Search Space</span>
+            <span>Search Space Path</span>
             <input
               type="text"
               value={draft.searchSpacePath}
               onChange={(event) => onDraftChange({ searchSpacePath: event.target.value })}
               placeholder="examples/research_search_space.json"
             />
+            <div className="control-field-actions">
+              <label className="ghost-button upload-inline-button">
+                Upload search space
+                <input className="upload-input" type="file" accept=".json,.jsonl,.txt" onChange={(event) => onUploadFile("searchSpace", event)} />
+              </label>
+            </div>
           </label>
+
           <label className="control-field control-field-small">
-            <span>轮次</span>
-            <input
-              type="number"
-              min={1}
-              max={12}
-              value={draft.rounds}
-              onChange={(event) => onDraftChange({ rounds: Number(event.target.value) || 1 })}
-            />
+            <span>Rounds</span>
+            <input type="number" min={1} max={12} value={draft.rounds} onChange={(event) => onDraftChange({ rounds: Number(event.target.value) || 1 })} />
           </label>
+
           <label className="control-field control-field-small">
-            <span>时间预算 ms</span>
+            <span>Time Budget (ms)</span>
             <input
               type="number"
               min={100}
@@ -909,56 +1100,64 @@ function ControlConsole({
               onChange={(event) => onDraftChange({ timeBudgetMs: Number(event.target.value) || 10_000 })}
             />
           </label>
+
           <label className="control-field control-field-small">
             <span>Seed</span>
-            <input
-              type="number"
-              min={0}
-              value={draft.seed}
-              onChange={(event) => onDraftChange({ seed: Number(event.target.value) || 0 })}
-            />
+            <input type="number" min={0} value={draft.seed} onChange={(event) => onDraftChange({ seed: Number(event.target.value) || 0 })} />
           </label>
+
           <label className="control-checkbox">
             <input
               type="checkbox"
               checked={draft.allowRuleBasedFallback}
               onChange={(event) => onDraftChange({ allowRuleBasedFallback: event.target.checked })}
             />
-            <span>允许 rule-based fallback</span>
+            <span>Allow rule-based fallback</span>
           </label>
         </div>
       </div>
 
       <div className="control-console-actions">
-        <button className="ghost-button" type="button" onClick={() => onRun("pytest")} disabled={!controlState || isLaunching || isBusy}>
-          跑 Pytest 回归
+        <button className="ghost-button" type="button" onClick={() => onRun("pytest")} disabled={!canLaunchJobs}>
+          Run Pytest
         </button>
-        <button className="ghost-button" type="button" onClick={() => onRun("smoke")} disabled={!controlState || isLaunching || isBusy}>
-          跑 Smoke 验收
+        <button className="ghost-button" type="button" onClick={() => onRun("smoke")} disabled={!canLaunchJobs}>
+          Run Smoke
         </button>
-        <button className="primary-button" type="button" onClick={() => onRun("research")} disabled={!controlState || isLaunching || isBusy}>
-          跑 Research
+        <button className="primary-button" type="button" onClick={() => onRun("research")} disabled={!canLaunchJobs}>
+          Run Research
         </button>
-        <button className="ghost-button" type="button" onClick={() => onRun("benchmark")} disabled={!controlState || isLaunching || isBusy}>
-          跑 Benchmark
+        <button className="ghost-button" type="button" onClick={() => onRun("benchmark")} disabled={!canLaunchJobs}>
+          Run Benchmark
         </button>
-        <button className="ghost-button" type="button" onClick={() => onRun("solve")} disabled={!controlState || isLaunching || isBusy}>
-          跑 Solve
+        <button className="ghost-button" type="button" onClick={() => onRun("solve")} disabled={!canLaunchJobs}>
+          Run Solve
+        </button>
+        <button className="ghost-button" type="button" onClick={() => onRun("solve-validate")} disabled={!canLaunchJobs}>
+          Run Solve + Validate
+        </button>
+        <button className="ghost-button" type="button" onClick={() => onRun("solve-submit")} disabled={!canLaunchJobs}>
+          Run Solve + Submit
         </button>
         <button className="ghost-button" type="button" onClick={onRefresh} disabled={isLaunching}>
-          刷新状态
+          Refresh State
         </button>
         {currentJob ? (
-          <button
-            className="ghost-button"
-            type="button"
-            onClick={() => onCancel(currentJob)}
-            disabled={currentJob.status !== CONTROL_JOB_STATUS.RUNNING}
-          >
-            停止当前任务
+          <button className="ghost-button" type="button" onClick={() => onCancel(currentJob)} disabled={!canCancelControlJob(currentJob)}>
+            Stop Current Job
           </button>
         ) : null}
       </div>
+
+      {currentJob ? (
+        <div className="queue-banner" role="status" aria-live="polite">
+          <strong>Worker is busy.</strong>
+          <span>
+            New actions will be queued automatically.
+            {queuedJobs.length > 0 ? ` Waiting jobs: ${queuedJobs.length}.` : ""}
+          </span>
+        </div>
+      ) : null}
 
       {controlError ? (
         <div className="error-banner" role="status" aria-live="polite">
@@ -966,96 +1165,156 @@ function ControlConsole({
         </div>
       ) : null}
 
+      {!controlError && controlNotice ? (
+        <div className="success-banner" role="status" aria-live="polite">
+          {controlNotice}
+        </div>
+      ) : null}
+
       <div className="control-console-grid control-console-status-grid">
         <section className="control-status-card">
           <div className="session-round-row">
-            <span className={`status-pill status-${currentJob?.status ?? "pending"}`}>{formatStatus(currentJob?.status ?? "pending")}</span>
-            <span className="meta-chip">{currentJob ? currentJob.kind.toUpperCase() : "暂无运行任务"}</span>
+            <span className={`status-pill status-${toStatusClass(currentJob?.status)}`}>{formatStatus(currentJob?.status ?? "pending")}</span>
+            <span className="meta-chip">{currentJob ? formatRunKind(currentJob.kind) : "No running job"}</span>
           </div>
           <p className="section-text control-status-copy">
             {currentJob
-              ? `开始于 ${formatTimestamp(currentJob.startedAt)}，${currentJob.finishedAt ? `结束于 ${formatTimestamp(currentJob.finishedAt)}。` : "当前仍在运行中。"}`
-              : "控制服务已就绪，选择一个动作就可以开始执行。"}
+              ? `Started at ${formatTimestamp(currentJob.startedAt)}${currentJob.finishedAt ? `, finished at ${formatTimestamp(currentJob.finishedAt)}.` : ", still running."}`
+              : "Control service is ready. Choose any action to start."}
           </p>
-          {currentJob?.outputRoot ? <p className="control-path">输出目录：{currentJob.outputRoot}</p> : null}
-          {currentJob?.dashboardReplayPath ? <p className="control-path">回放文件：{currentJob.dashboardReplayPath}</p> : null}
+          {currentJob?.outputRoot ? <p className="control-path">Output root: {currentJob.outputRoot}</p> : null}
+          {currentJob?.dashboardReplayPath ? <p className="control-path">Replay path: {currentJob.dashboardReplayPath}</p> : null}
           {currentJob?.command.length ? (
             <div className="command-preview">
-              <strong>当前命令</strong>
+              <strong>Current command</strong>
               <code>{currentJob.command.join(" ")}</code>
             </div>
           ) : null}
           {currentJob && Object.keys(currentJob.artifacts).length > 0 ? (
             <div className="artifact-actions">
-              <strong>当前任务产物</strong>
+              <strong>Current artifacts</strong>
               <div className="artifact-chip-row">
-                {Object.entries(currentJob.artifacts).map(([label, path]) => (
-                  <div className="artifact-chip-card" key={`${currentJob.jobId}-${label}`}>
-                    <span className="config-chip">{label}</span>
-                    <button className="ghost-button" type="button" onClick={() => onInspectArtifact(path)}>
-                      查看
-                    </button>
-                    {path.endsWith(".json") && path.includes("replay") ? (
-                      <button className="ghost-button" type="button" onClick={() => onLoadReplayArtifact(path)}>
-                        载入舞台
+                {Object.entries(currentJob.artifacts)
+                  .filter(([, path]) => path)
+                  .map(([label, path]) => (
+                    <div className="artifact-chip-card" key={`${currentJob.jobId}-${label}`}>
+                      <span className="config-chip">{label}</span>
+                      <button className="ghost-button" type="button" onClick={() => onInspectArtifact(path)}>
+                        Preview
                       </button>
-                    ) : null}
-                  </div>
-                ))}
+                      {shouldTreatAsReplayArtifact(label, path) ? (
+                        <button className="ghost-button" type="button" onClick={() => onLoadReplayArtifact(path)}>
+                          Load Replay
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
               </div>
             </div>
           ) : null}
         </section>
 
         <section className="control-status-card">
-          <strong>日志尾部</strong>
-          <pre className="control-log">{currentJob?.logTail || "这里会滚动显示最近的命令输出。启动一个任务后就会有内容。"}</pre>
+          <strong>Live log tail</strong>
+          <pre className="control-log">
+            {currentJob?.logTail || "Most recent command output will appear here after a job starts."}
+          </pre>
         </section>
       </div>
 
       <section className="control-status-card">
-        <strong>最近运行</strong>
-        <div className="job-history-list">
-          {recentJobs.length > 0 ? (
-            recentJobs.map((job) => (
-              <article className="job-history-item" key={job.jobId}>
+        <div className="session-round-row">
+          <strong>Queue</strong>
+          <span className={`status-pill status-${queuedJobs.length > 0 ? CONTROL_JOB_STATUS.QUEUED : "unknown"}`}>
+            {queuedJobs.length > 0 ? `${queuedJobs.length} waiting` : "empty"}
+          </span>
+        </div>
+        <p className="section-text control-status-copy">
+          Web control runs jobs in sequence. You can launch multiple actions and they will execute in order.
+        </p>
+        <div className="job-history-list queue-history-list">
+          {queuedJobs.length > 0 ? (
+            queuedJobs.map((job) => (
+              <article className="job-history-item queue-job-item" key={job.jobId}>
                 <div className="session-round-row">
-                  <span className={`status-pill status-${job.status}`}>{formatStatus(job.status)}</span>
+                  <span className={`status-pill status-${toStatusClass(job.status)}`}>{formatStatus(job.status)}</span>
                   <strong translate="no">{job.jobId}</strong>
                 </div>
                 <p>
-                  {job.kind.toUpperCase()} · 开始于 {formatTimestamp(job.startedAt)}
-                  {job.outputRoot ? ` · 输出到 ${job.outputRoot}` : ""}
+                  {formatRunKind(job.kind)}
+                  {job.outputRoot ? ` / ${job.outputRoot}` : ""}
                 </p>
+                {job.command.length > 0 ? (
+                  <div className="command-preview queue-command-preview">
+                    <strong>Queued command</strong>
+                    <code>{job.command.join(" ")}</code>
+                  </div>
+                ) : null}
+                <div className="artifact-chip-row">
+                  <button className="ghost-button" type="button" onClick={() => onCancel(job)} disabled={!canCancelControlJob(job)}>
+                    Cancel Queue Entry
+                  </button>
+                </div>
+              </article>
+            ))
+          ) : (
+            <div className="empty-state">No queued jobs.</div>
+          )}
+        </div>
+      </section>
+
+      <section className="control-status-card">
+        <strong>Recent jobs</strong>
+        <div className="job-history-list">
+          {historyJobs.length > 0 ? (
+            historyJobs.map((job) => (
+              <article className="job-history-item" key={job.jobId}>
+                <div className="session-round-row">
+                  <span className={`status-pill status-${toStatusClass(job.status)}`}>{formatStatus(job.status)}</span>
+                  <strong translate="no">{job.jobId}</strong>
+                </div>
+                <p>
+                  {formatRunKind(job.kind)} / started {formatTimestamp(job.startedAt)}
+                  {job.outputRoot ? ` / ${job.outputRoot}` : ""}
+                </p>
+                {canCancelControlJob(job) ? (
+                  <div className="artifact-chip-row">
+                    <button className="ghost-button" type="button" onClick={() => onCancel(job)}>
+                      {job.status === CONTROL_JOB_STATUS.QUEUED ? "Cancel Queue Entry" : "Stop Job"}
+                    </button>
+                  </div>
+                ) : null}
                 {Object.keys(job.artifacts).length > 0 ? (
                   <div className="artifact-chip-row">
-                    {Object.entries(job.artifacts).map(([label, path]) => (
-                      <div className="artifact-chip-card" key={`${job.jobId}-${label}`}>
-                        <span className="config-chip">{label}</span>
-                        <button className="ghost-button" type="button" onClick={() => onInspectArtifact(path)}>
-                          查看
-                        </button>
-                        {path.endsWith(".json") && path.includes("replay") ? (
-                          <button className="ghost-button" type="button" onClick={() => onLoadReplayArtifact(path)}>
-                            载入舞台
+                    {Object.entries(job.artifacts)
+                      .filter(([, path]) => path)
+                      .map(([label, path]) => (
+                        <div className="artifact-chip-card" key={`${job.jobId}-${label}`}>
+                          <span className="config-chip">{label}</span>
+                          <button className="ghost-button" type="button" onClick={() => onInspectArtifact(path)}>
+                            Preview
                           </button>
-                        ) : null}
-                      </div>
-                    ))}
+                          {shouldTreatAsReplayArtifact(label, path) ? (
+                            <button className="ghost-button" type="button" onClick={() => onLoadReplayArtifact(path)}>
+                              Load Replay
+                            </button>
+                          ) : null}
+                        </div>
+                      ))}
                   </div>
                 ) : null}
               </article>
             ))
           ) : (
-            <div className="empty-state">当前还没有从网页发起过本地任务。</div>
+            <div className="empty-state">No finished web-control jobs yet.</div>
           )}
         </div>
       </section>
 
       {previewVisible ? (
         <section className="control-status-card">
-          <strong>产物预览</strong>
-          {artifactPreviewPath ? <p className="control-path">当前文件：{artifactPreviewPath}</p> : null}
+          <strong>Artifact preview</strong>
+          {artifactPreviewPath ? <p className="control-path">Current file: {artifactPreviewPath}</p> : null}
           {artifactPreviewError ? <div className="error-banner">{artifactPreviewError}</div> : null}
           {artifactPreviewBody ? <pre className="control-log artifact-preview-log">{artifactPreviewBody}</pre> : null}
         </section>
@@ -1068,8 +1327,8 @@ function ProcessSteps() {
   return (
     <section className="process-panel">
       <div className="panel-head">
-        <p className="section-eyebrow">先看全局</p>
-        <h2>这个 Agent 是如何一轮轮变聪明的</h2>
+        <p className="section-eyebrow">Process</p>
+        <h2>How The Agent Improves Round By Round</h2>
       </div>
       <div className="process-grid">
         {PROCESS_STEPS.map((item) => (
@@ -1086,13 +1345,10 @@ function ProcessSteps() {
 
 function SessionBubble({ beat, isActive, onOpenDetails }: SessionBubbleProps) {
   const typedBody = useTypedText(beat.body, isActive);
-  const isDetailWorthy = Object.keys(beat.payload).length > 0 && beat.tone !== "agent";
+  const isDetailWorthy = Object.keys(beat.payload).length > 0;
 
   return (
-    <article
-      className={`session-row session-${beat.tone} ${isActive ? "session-row-active" : ""}`}
-      id={`beat-${beat.id}`}
-    >
+    <article className={`session-row session-${beat.tone} ${isActive ? "session-row-active" : ""}`} id={`beat-${beat.id}`}>
       <div className="session-bubble">
         <div className="session-bubble-head">
           <div>
@@ -1100,7 +1356,7 @@ function SessionBubble({ beat, isActive, onOpenDetails }: SessionBubbleProps) {
             <strong>{beat.title}</strong>
           </div>
           <div className="session-bubble-tags">
-            {beat.roundIndex !== null ? <span className="meta-chip">第 {beat.roundIndex + 1} 轮</span> : null}
+            {beat.roundIndex !== null ? <span className="meta-chip">Round {beat.roundIndex + 1}</span> : null}
             {beat.experimentId ? (
               <span className="meta-chip" translate="no">
                 {beat.experimentId}
@@ -1125,7 +1381,7 @@ function SessionBubble({ beat, isActive, onOpenDetails }: SessionBubbleProps) {
           <time>{formatTimestamp(beat.ts)}</time>
           {isDetailWorthy ? (
             <button className="detail-link" type="button" onClick={() => onOpenDetails(beat)}>
-              查看详情
+              Inspect Payload
             </button>
           ) : null}
         </div>
@@ -1158,16 +1414,10 @@ function DetailModal({ beat, onClose }: DetailModalProps) {
 
   return (
     <div className="detail-modal-overlay" role="presentation" onClick={onClose}>
-      <div
-        className="detail-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="查看事件详情"
-        onClick={(event) => event.stopPropagation()}
-      >
+      <div className="detail-modal" role="dialog" aria-modal="true" aria-label="Inspect event payload" onClick={(event) => event.stopPropagation()}>
         <div className="detail-modal-head">
           <div>
-            <p className="section-eyebrow">结构化详情</p>
+            <p className="section-eyebrow">Event Detail</p>
             <h3>{beat.title}</h3>
           </div>
           <button className="detail-close" type="button" onClick={onClose}>
@@ -1176,14 +1426,14 @@ function DetailModal({ beat, onClose }: DetailModalProps) {
         </div>
         <div className="detail-modal-grid">
           <div className="detail-card">
-            <strong>事件信息</strong>
-            <p>类型：{beat.type}</p>
-            <p>时间：{formatTimestamp(beat.ts)}</p>
-            <p>轮次：{beat.roundIndex !== null ? `第 ${beat.roundIndex + 1} 轮` : "暂无"}</p>
-            <p>实验：{beat.experimentId ?? "暂无"}</p>
+            <strong>Event metadata</strong>
+            <p>Type: {beat.type}</p>
+            <p>Timestamp: {formatTimestamp(beat.ts)}</p>
+            <p>Round: {beat.roundIndex !== null ? `Round ${beat.roundIndex + 1}` : "N/A"}</p>
+            <p>Experiment: {beat.experimentId ?? "N/A"}</p>
           </div>
           <div className="detail-card detail-card-code">
-            <strong>原始 payload</strong>
+            <strong>Raw payload</strong>
             <pre>{JSON.stringify(beat.payload, null, 2)}</pre>
           </div>
         </div>
@@ -1192,67 +1442,40 @@ function DetailModal({ beat, onClose }: DetailModalProps) {
   );
 }
 
-function SessionViewer({
-  beats,
-  currentBeat,
-  rounds,
-  totalBeats,
-  visibleBeats,
-  isPlaybackMode,
-  isPlaying,
-  onOpenDetails,
-}: SessionViewerProps) {
-  useEffect(() => {
-    if (!currentBeat) {
-      return;
-    }
-
-    const element = document.getElementById(`beat-${currentBeat.id}`);
-    if (!element) {
-      return;
-    }
-
-    window.requestAnimationFrame(() => {
-      element.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    });
-  }, [currentBeat]);
-
+function SessionViewer({ beats, currentBeat, rounds, totalBeats, visibleBeats, isPlaybackMode, isPlaying, onOpenDetails }: SessionViewerProps) {
   const activeRoundIndex = currentBeat?.roundIndex ?? (rounds.length > 0 ? rounds.length - 1 : null);
-  const shownCount = visibleBeats === 0 ? totalBeats : visibleBeats;
+  const shownCount = visibleBeats <= 0 ? totalBeats : Math.min(visibleBeats, totalBeats);
 
   return (
     <section className="session-viewer" id="story-stage">
       <aside className="session-sidebar">
         <div className="session-sidebar-head">
-          <p className="section-eyebrow">会话导航</p>
+          <p className="section-eyebrow">Session Navigator</p>
           <h2>Agent Session</h2>
-          <p>当前主舞台参考你给的示例，改成了真正的会话播放器。</p>
+          <p>Watch strategy proposals, tool calls, judge decisions, and reflections as one stream.</p>
         </div>
         <div className="session-sidebar-block">
-          <strong>播放进度</strong>
+          <strong>Progress</strong>
           <p>
-            已展示 {formatInteger(shownCount)} / {formatInteger(totalBeats)} 个动作节点
+            Showing {formatInteger(shownCount)} / {formatInteger(totalBeats)} beats
           </p>
         </div>
         <div className="session-sidebar-block">
-          <strong>轮次切片</strong>
+          <strong>Rounds</strong>
           <div className="session-round-list">
             {rounds.length > 0 ? (
               rounds.map((round, index) => (
-                <article
-                  className={`session-round-item ${activeRoundIndex === index ? "session-round-item-active" : ""}`}
-                  key={round.experimentId}
-                >
+                <article className={`session-round-item ${activeRoundIndex === index ? "session-round-item-active" : ""}`} key={round.experimentId}>
                   <div className="session-round-row">
-                    <span className={`status-pill status-${round.status}`}>{formatStatus(round.status)}</span>
-                    <span className="session-round-index">第 {index + 1} 轮</span>
+                    <span className={`status-pill status-${toStatusClass(round.status)}`}>{formatStatus(round.status)}</span>
+                    <span className="session-round-index">Round {index + 1}</span>
                   </div>
                   <strong translate="no">{round.experimentId}</strong>
                   <p>{round.hypothesis}</p>
                 </article>
               ))
             ) : (
-              <div className="empty-state dark-empty">播放还没走到完整轮次。</div>
+              <div className="empty-state dark-empty">No round insights available yet.</div>
             )}
           </div>
         </div>
@@ -1261,15 +1484,14 @@ function SessionViewer({
       <div className="session-main">
         <div className="session-topbar">
           <div>
-            <span className="session-title">AutoSolver 会话回放</span>
+            <span className="session-title">AutoSolver Session Playback</span>
             <p className="session-subtitle">
-              {currentBeat
-                ? `当前镜头：${currentBeat.title}`
-                : "当前是完整视图，你可以直接滚动查看整个 Agent 链路。"}
+              {currentBeat ? `Current beat: ${currentBeat.title}` : "Showing full timeline. Scroll to inspect any event."}
             </p>
           </div>
           <div className="session-topbar-tags">
-            <span className="meta-chip">{isPlaybackMode ? "动画模式" : "完整模式"}</span>
+            <span className="meta-chip">{isPlaybackMode ? "Playback mode" : "Full mode"}</span>
+            <span className="meta-chip">{isPlaying ? "Playing" : "Idle"}</span>
             {currentBeat?.experimentId ? (
               <span className="meta-chip" translate="no">
                 {currentBeat.experimentId}
@@ -1281,15 +1503,10 @@ function SessionViewer({
         <div className="session-chat" aria-live="polite">
           {beats.length > 0 ? (
             beats.map((beat) => (
-              <SessionBubble
-                key={beat.id}
-                beat={beat}
-                isActive={Boolean(isPlaying && currentBeat?.id === beat.id)}
-                onOpenDetails={onOpenDetails}
-              />
+              <SessionBubble key={beat.id} beat={beat} isActive={Boolean(isPlaying && currentBeat?.id === beat.id)} onOpenDetails={onOpenDetails} />
             ))
           ) : (
-            <div className="empty-state dark-empty">当前没有可展示的会话消息。</div>
+            <div className="empty-state dark-empty">No replay beats available.</div>
           )}
         </div>
       </div>
@@ -1300,7 +1517,7 @@ function SessionViewer({
 function ScoreChart({ rounds }: { rounds: RoundInsight[] }) {
   const points = buildChartPoints(rounds);
   if (points.length === 0) {
-    return <div className="empty-state">需要至少一轮完整结果，才能画出分数变化曲线。</div>;
+    return <div className="empty-state">Need at least one completed round to render chart.</div>;
   }
 
   const width = 760;
@@ -1326,34 +1543,25 @@ function ScoreChart({ rounds }: { rounds: RoundInsight[] }) {
   const expectedPath = points
     .map((point, index) => `${index === 0 ? "M" : "L"} ${positionX(index)} ${positionY(point.expected, minExpected, maxExpected)}`)
     .join(" ");
-
-  const costPath = points
-    .map((point, index) => `${index === 0 ? "M" : "L"} ${positionX(index)} ${positionY(point.cost, minCost, maxCost)}`)
-    .join(" ");
+  const costPath = points.map((point, index) => `${index === 0 ? "M" : "L"} ${positionX(index)} ${positionY(point.cost, minCost, maxCost)}`).join(" ");
 
   return (
     <div className="chart-shell">
       <div className="chart-legend">
-        <span className="legend-chip legend-primary">预计完单</span>
-        <span className="legend-chip legend-secondary">总成本</span>
+        <span className="legend-chip legend-primary">Expected completed orders</span>
+        <span className="legend-chip legend-secondary">Total cost</span>
       </div>
-      <svg className="chart-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="实验轮次分数变化曲线">
+      <svg className="chart-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Round trend chart">
         <rect className="chart-backdrop" width={width} height={height} rx="26" />
         <path className="chart-line chart-line-primary" d={expectedPath} />
         <path className="chart-line chart-line-secondary" d={costPath} />
         {points.map((point, index) => (
-          <circle
-            className="chart-dot chart-dot-primary"
-            key={`expected-${index}`}
-            cx={positionX(index)}
-            cy={positionY(point.expected, minExpected, maxExpected)}
-            r="5"
-          />
+          <circle className="chart-dot chart-dot-primary" key={`expected-${index}`} cx={positionX(index)} cy={positionY(point.expected, minExpected, maxExpected)} r="5" />
         ))}
       </svg>
       <div className="chart-footer">
-        <span>最优预计完单：{formatCount(Math.max(...expectedValues))}</span>
-        <span>最低总成本：{formatCount(Math.min(...costValues))}</span>
+        <span>Best expected: {formatCount(Math.max(...expectedValues))}</span>
+        <span>Lowest cost: {formatCount(Math.min(...costValues))}</span>
       </div>
     </div>
   );
@@ -1366,16 +1574,16 @@ function RoundCard({ round }: RoundCardProps) {
     <article className="round-card">
       <div className="round-head">
         <div className="round-tags">
-          <span className={`status-pill status-${round.status}`}>{formatStatus(round.status)}</span>
-          <span className={`proposal-pill proposal-${round.proposalType}`}>{formatProposalType(round.proposalType)}</span>
+          <span className={`status-pill status-${toStatusClass(round.status)}`}>{formatStatus(round.status)}</span>
+          <span className={`proposal-pill proposal-${toProposalClass(round.proposalType)}`}>{formatProposalType(round.proposalType)}</span>
         </div>
         <strong translate="no">{round.experimentId}</strong>
       </div>
       <p className="round-title">{round.hypothesis}</p>
       <div className="round-stats">
-        <span>预计完单 {formatCount(round.averageExpectedCompletedOrders)}</span>
-        <span>总成本 {formatCount(round.averageTotalCost)}</span>
-        <span>耗时 {formatInteger(round.totalElapsedMs)} ms</span>
+        <span>expected {formatCount(round.averageExpectedCompletedOrders)}</span>
+        <span>cost {formatCount(round.averageTotalCost)}</span>
+        <span>elapsed {formatInteger(round.totalElapsedMs)} ms</span>
       </div>
       {configChips.length > 0 ? (
         <div className="story-meta">
@@ -1396,15 +1604,14 @@ function CaseCard({ row }: CaseCardProps) {
     <article className="case-card">
       <div className="case-head">
         <strong translate="no">{row.caseId ?? row.instanceId ?? "unknown-case"}</strong>
-        <span className="meta-chip">运行 {formatInteger(row.runs)} 次</span>
+        <span className="meta-chip">runs {formatInteger(row.runs)}</span>
       </div>
       <p className="case-copy">
-        平均预计完单 {formatCount(row.averageExpectedCompletedOrders)}，平均成本 {formatCount(row.averageTotalCost)}，平均耗时{" "}
-        {formatInteger(row.averageElapsedMs)} ms。
+        avg expected {formatCount(row.averageExpectedCompletedOrders)}, avg cost {formatCount(row.averageTotalCost)}, avg elapsed {formatInteger(row.averageElapsedMs)} ms.
       </p>
       <div className="story-meta">
-        <span className="config-chip">候选池 {formatInteger(row.averageCandidateOptionCount)}</span>
-        <span className="config-chip">合单候选 {formatInteger(row.averageBundleOptionCount)}</span>
+        <span className="config-chip">candidate_pool {formatInteger(row.averageCandidateOptionCount)}</span>
+        <span className="config-chip">bundle_pool {formatInteger(row.averageBundleOptionCount)}</span>
         {row.lastSolverName ? <span className="config-chip">{row.lastSolverName}</span> : null}
       </div>
     </article>
@@ -1414,7 +1621,7 @@ function CaseCard({ row }: CaseCardProps) {
 function DebugDrawer({ events }: { events: ReplayEvent[] }) {
   return (
     <details className="debug-drawer">
-      <summary>查看原始事件流</summary>
+      <summary>View raw event log</summary>
       <div className="raw-log-list">
         {events.map((event) => (
           <article className="raw-log-item" key={`${event.ts}-${event.type}`}>
@@ -1435,167 +1642,176 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [sourceLabel, setSourceLabel] = useState(LIVE_REPLAY_SOURCE_LABEL);
   const [lastReloadedAt, setLastReloadedAt] = useState<string | null>(null);
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [visibleBeatCount, setVisibleBeatCount] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackSpeedMs, setPlaybackSpeedMs] = useState(1200);
+  const [playbackSpeedMs, setPlaybackSpeedMs] = useState<number>(() => loadStoredPlaybackSpeed());
   const [detailBeat, setDetailBeat] = useState<StoryBeat | null>(null);
   const [hasAutoStarted, setHasAutoStarted] = useState(false);
   const [controlState, setControlState] = useState<ControlState | null>(null);
   const [controlError, setControlError] = useState<string | null>(null);
+  const [controlNotice, setControlNotice] = useState<string | null>(null);
   const [isLaunching, setIsLaunching] = useState(false);
   const [artifactPreviewPath, setArtifactPreviewPath] = useState<string | null>(null);
   const [artifactPreviewBody, setArtifactPreviewBody] = useState<string | null>(null);
   const [artifactPreviewError, setArtifactPreviewError] = useState<string | null>(null);
-  const [runDraft, setRunDraft] = useState<RunDraft>({
-    benchmarkPath: "examples/benchmarks/benchmark_manifest.json",
-    instancePath: "examples/instances/sample_instance.json",
-    searchSpacePath: "examples/research_search_space.json",
-    rounds: 2,
-    timeBudgetMs: 10_000,
-    seed: 0,
-    allowRuleBasedFallback: false,
-  });
+  const [runDraft, setRunDraft] = useState<RunDraft>(() => loadStoredRunDraft());
 
-  const loadBundledReplay = useEffectEvent(async () => {
-    let payload: ReplayData;
-    let loadedSourceLabel = LIVE_REPLAY_SOURCE_LABEL;
-
-    try {
-      payload = await loadReplayPayload(LIVE_REPLAY_FILE);
-    } catch (liveError) {
-      payload = await loadReplayPayload(DEMO_REPLAY_FILE);
-      loadedSourceLabel = DEMO_REPLAY_SOURCE_LABEL;
-      if (liveError instanceof Error) {
-        console.warn(`Falling back to ${DEMO_REPLAY_FILE}: ${liveError.message}`);
-      }
-    }
-
-    const isFirstLoad = data === null;
-
+  const commitReplay = useCallback((payload: ReplayData, label: string, resetPlayback: boolean, enableAutoRefresh: boolean) => {
     startTransition(() => {
       setData(payload);
       setError(null);
-      setSourceLabel(loadedSourceLabel);
+      setSourceLabel(label);
       setLastReloadedAt(new Date().toISOString());
-      if (isFirstLoad) {
+      setAutoRefreshEnabled(enableAutoRefresh);
+      if (resetPlayback) {
         setVisibleBeatCount(0);
         setIsPlaying(false);
+        setHasAutoStarted(false);
       }
     });
-  });
+  }, []);
 
-  const loadControlStatus = useEffectEvent(async () => {
-    const snapshot = await loadControlSnapshot();
-    startTransition(() => {
-      setControlState(snapshot);
-      setControlError(null);
-      setRunDraft((current) => ({
-        benchmarkPath: current.benchmarkPath || snapshot.defaults.benchmarkPath,
-        instancePath: current.instancePath || snapshot.defaults.instancePath,
-        searchSpacePath: current.searchSpacePath || snapshot.defaults.searchSpacePath,
-        rounds: current.rounds || snapshot.defaults.rounds,
-        timeBudgetMs: current.timeBudgetMs || snapshot.defaults.timeBudgetMs,
-        seed: current.seed ?? snapshot.defaults.seed,
-        allowRuleBasedFallback: current.allowRuleBasedFallback,
-      }));
-    });
-  });
+  const loadLiveReplayWithFallback = useCallback(
+    async (resetPlayback: boolean) => {
+      try {
+        const payload = await loadReplayPayload(LIVE_REPLAY_FILE);
+        commitReplay(payload, LIVE_REPLAY_SOURCE_LABEL, resetPlayback, true);
+      } catch (liveError) {
+        try {
+          const payload = await loadReplayPayload(DEMO_REPLAY_FILE);
+          commitReplay(payload, DEMO_REPLAY_SOURCE_LABEL, resetPlayback, false);
+          if (liveError instanceof Error) {
+            console.warn(`Live replay unavailable, using demo: ${liveError.message}`);
+          }
+        } catch {
+          throw liveError;
+        }
+      }
+    },
+    [commitReplay],
+  );
+
+  const refreshControlState = useCallback(
+    async (silent: boolean) => {
+      try {
+        const snapshot = await loadControlSnapshot();
+        startTransition(() => {
+          setControlState(snapshot);
+          setControlError(null);
+          setRunDraft((current) =>
+            sanitizeRunDraft({
+              benchmarkPath: current.benchmarkPath || snapshot.defaults.benchmarkPath,
+              instancePath: current.instancePath || snapshot.defaults.instancePath,
+              searchSpacePath: current.searchSpacePath || snapshot.defaults.searchSpacePath,
+              rounds: current.rounds || snapshot.defaults.rounds,
+              timeBudgetMs: current.timeBudgetMs || snapshot.defaults.timeBudgetMs,
+              seed: current.seed ?? snapshot.defaults.seed,
+              allowRuleBasedFallback: current.allowRuleBasedFallback,
+            }),
+          );
+        });
+      } catch (loadError) {
+        if (!silent) {
+          setControlError(errorToMessage(loadError, "Failed to fetch control status."));
+        }
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(RUN_DRAFT_STORAGE_KEY, JSON.stringify(runDraft));
+    } catch {
+      // Ignore storage failures in restricted environments.
+    }
+  }, [runDraft]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PLAYBACK_SPEED_STORAGE_KEY, String(playbackSpeedMs));
+    } catch {
+      // Ignore storage failures in restricted environments.
+    }
+  }, [playbackSpeedMs]);
 
   useEffect(() => {
     let cancelled = false;
-
     async function bootstrap() {
       try {
-        await loadBundledReplay();
+        await loadLiveReplayWithFallback(true);
       } catch (loadError) {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : "加载 replay 数据时发生未知错误。");
+          setError(errorToMessage(loadError, "Failed to load replay payload."));
         }
       }
+      if (!cancelled) {
+        await refreshControlState(false);
+      }
     }
-
     void bootstrap();
     return () => {
       cancelled = true;
     };
-  }, [loadBundledReplay]);
+  }, [loadLiveReplayWithFallback, refreshControlState]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function bootstrapControl() {
-      try {
-        await loadControlStatus();
-      } catch (loadError) {
-        if (!cancelled) {
-          setControlError(loadError instanceof Error ? loadError.message : "加载控制服务状态时发生未知错误。");
-        }
-      }
-    }
-
-    void bootstrapControl();
-    return () => {
-      cancelled = true;
-    };
-  }, [loadControlStatus]);
-
-  useEffect(() => {
-    if (!isBundledReplaySource(sourceLabel)) {
+    if (!autoRefreshEnabled || !isLiveReplaySource(sourceLabel)) {
       return;
     }
-
     const intervalId = window.setInterval(() => {
-      void loadBundledReplay();
+      void loadLiveReplayWithFallback(false).catch(() => {
+        // Keep silent for polling refresh.
+      });
     }, 2000);
-
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [loadBundledReplay, sourceLabel]);
+  }, [autoRefreshEnabled, loadLiveReplayWithFallback, sourceLabel]);
+
+  const controlPollingMs = useMemo(() => {
+    const isBusy = Boolean(controlState?.currentJob) || (controlState?.queuedJobs.length ?? 0) > 0;
+    return isBusy ? 1500 : 5000;
+  }, [controlState]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
-      void loadControlStatus().catch((loadError) => {
-        setControlError(loadError instanceof Error ? loadError.message : "控制服务状态轮询失败。");
-      });
-    }, 1500);
-
+      void refreshControlState(true);
+    }, controlPollingMs);
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [loadControlStatus]);
+  }, [controlPollingMs, refreshControlState]);
 
   const events = data?.events ?? [];
   const roundInsights = data?.roundInsights ?? [];
   const caseLeaderboard = data?.caseLeaderboard ?? [];
   const summary = data?.summary;
   const agent: ReplayAgentSummary | undefined = data?.agent;
-  const storyBeats = buildStoryBeats(events);
+  const storyBeats = useMemo(() => buildStoryBeats(events), [events]);
   const totalBeats = storyBeats.length;
   const isPlaybackFinished = totalBeats > 0 && visibleBeatCount >= totalBeats && !isPlaying;
   const isPartialPlayback = visibleBeatCount > 0 && visibleBeatCount < totalBeats;
   const isPlaybackMode = isPartialPlayback;
   const shownBeats = isPartialPlayback ? storyBeats.slice(0, visibleBeatCount) : storyBeats;
-  const completedRoundCount = shownBeats.filter((beat) => beat.type === EVENT_TYPES.RESEARCH_ROUND_COMPLETED).length;
+  const completedRoundCount = shownBeats.filter((beat) => beat.type === EVENT_TYPES.RESEARCH_ROUND_COMPLETED || beat.type === EVENT_TYPES.RESEARCH_ROUND_FAILED).length;
   const shownRounds = isPartialPlayback ? roundInsights.slice(0, completedRoundCount) : roundInsights;
   const currentBeat = isPartialPlayback ? shownBeats.at(-1) ?? null : null;
   const visibleKeepCount = shownRounds.filter((round) => round.status === "keep").length;
   const visibleDiscardCount = shownRounds.filter((round) => round.status === "discard").length;
   const visibleFailureCount = shownRounds.filter((round) => round.status === "crash").length;
   const bestRound = selectBestRound(shownRounds.length > 0 ? shownRounds : roundInsights);
-  const autoRefreshEnabled = isBundledReplaySource(sourceLabel);
 
   useEffect(() => {
     if (hasAutoStarted || totalBeats === 0) {
       return;
     }
-
     const timerId = window.setTimeout(() => {
       setVisibleBeatCount(1);
       setIsPlaying(true);
       setHasAutoStarted(true);
     }, 700);
-
     return () => {
       window.clearTimeout(timerId);
     };
@@ -1605,7 +1821,6 @@ function App() {
     if (!isPlaying || totalBeats === 0) {
       return;
     }
-
     const timerId = window.setTimeout(() => {
       setVisibleBeatCount((current) => {
         const nextValue = current <= 0 ? 1 : current + 1;
@@ -1627,34 +1842,27 @@ function App() {
     if (!file) {
       return;
     }
-
     try {
       const text = await file.text();
       const payload: unknown = JSON.parse(text);
       if (!isReplayData(payload)) {
-        throw new Error("你选择的文件不是合法的 replay JSON。");
+        throw new Error("Selected file is not a valid replay JSON payload.");
       }
-      startTransition(() => {
-        setData(payload);
-        setError(null);
-        setSourceLabel(file.name);
-        setLastReloadedAt(new Date().toISOString());
-        setVisibleBeatCount(0);
-        setIsPlaying(false);
-        setHasAutoStarted(false);
-      });
+      commitReplay(payload, file.name, true, false);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "加载本地 JSON 失败。");
+      setError(errorToMessage(loadError, "Failed to load local replay JSON."));
     } finally {
       event.target.value = "";
     }
   }
 
-  function handleUseBundledReplay() {
-    setVisibleBeatCount(0);
-    setIsPlaying(false);
-    setHasAutoStarted(false);
-    void loadBundledReplay();
+  async function handleUseDemoReplay() {
+    try {
+      const payload = await loadReplayPayload(DEMO_REPLAY_FILE);
+      commitReplay(payload, DEMO_REPLAY_SOURCE_LABEL, true, false);
+    } catch (loadError) {
+      setError(errorToMessage(loadError, "Failed to load demo replay."));
+    }
   }
 
   function handleStartPlayback() {
@@ -1663,6 +1871,7 @@ function App() {
     }
     setVisibleBeatCount(1);
     setIsPlaying(true);
+    setHasAutoStarted(true);
   }
 
   function handleTogglePlayback() {
@@ -1672,6 +1881,7 @@ function App() {
     if (visibleBeatCount === 0) {
       setVisibleBeatCount(1);
       setIsPlaying(true);
+      setHasAutoStarted(true);
       return;
     }
     setIsPlaying((current) => !current);
@@ -1680,15 +1890,18 @@ function App() {
   function handleResetPlayback() {
     setVisibleBeatCount(0);
     setIsPlaying(false);
+    setHasAutoStarted(true);
   }
 
   function handleShowAll() {
     setVisibleBeatCount(0);
     setIsPlaying(false);
+    setHasAutoStarted(true);
   }
 
   function handleSpeedChange(event: ChangeEvent<HTMLSelectElement>) {
-    setPlaybackSpeedMs(Number(event.target.value));
+    const nextValue = Number(event.target.value);
+    setPlaybackSpeedMs(Number.isFinite(nextValue) ? nextValue : 1200);
   }
 
   function handleOpenDetails(beat: StoryBeat) {
@@ -1700,30 +1913,56 @@ function App() {
   }
 
   function handleDraftChange(patch: Partial<RunDraft>) {
-    setRunDraft((current) => ({ ...current, ...patch }));
+    setRunDraft((current) => sanitizeRunDraft({ ...current, ...patch }));
   }
 
   function handleApplyPreset(preset: RunPreset) {
-    setRunDraft((current) => ({ ...current, ...preset.patch }));
+    setRunDraft((current) => sanitizeRunDraft({ ...current, ...preset.patch }));
+    setControlNotice(`Preset applied: ${preset.label}`);
+    setControlError(null);
   }
 
-  async function handleRun(kind: "pytest" | "smoke" | "research" | "benchmark" | "solve") {
+  async function handleUploadFile(target: UploadTarget, event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    try {
+      const uploadedPath = await uploadControlFile(target, file);
+      const patch: Partial<RunDraft> =
+        target === "benchmark"
+          ? { benchmarkPath: uploadedPath }
+          : target === "instance"
+            ? { instancePath: uploadedPath }
+            : { searchSpacePath: uploadedPath };
+      startTransition(() => {
+        setRunDraft((current) => sanitizeRunDraft({ ...current, ...patch }));
+        setControlError(null);
+        setControlNotice(`Uploaded ${file.name} to ${uploadedPath}`);
+      });
+    } catch (uploadError) {
+      setControlNotice(null);
+      setControlError(errorToMessage(uploadError, "Failed to upload file."));
+    } finally {
+      event.target.value = "";
+    }
+  }
+
+  async function handleRun(kind: ControlRunKind) {
     setIsLaunching(true);
     try {
       const snapshot = await runControlJob(kind, runDraft);
       startTransition(() => {
         setControlState(snapshot);
         setControlError(null);
+        setControlNotice(`${formatRunKind(kind)} submitted.`);
       });
-      if (kind !== "pytest") {
-        setSourceLabel(LIVE_REPLAY_SOURCE_LABEL);
-        setVisibleBeatCount(0);
-        setIsPlaying(false);
-        setHasAutoStarted(false);
-        await loadBundledReplay();
+      if (kind === "research" || kind === "smoke") {
+        await loadLiveReplayWithFallback(true);
       }
     } catch (launchError) {
-      setControlError(launchError instanceof Error ? launchError.message : "网页启动任务失败。");
+      setControlNotice(null);
+      setControlError(errorToMessage(launchError, "Failed to launch web-control job."));
     } finally {
       setIsLaunching(false);
     }
@@ -1735,9 +1974,11 @@ function App() {
       startTransition(() => {
         setControlState(snapshot);
         setControlError(null);
+        setControlNotice(job.status === CONTROL_JOB_STATUS.QUEUED ? `Queue item cancelled: ${job.jobId}` : `Cancel requested: ${job.jobId}`);
       });
     } catch (cancelError) {
-      setControlError(cancelError instanceof Error ? cancelError.message : "取消任务失败。");
+      setControlNotice(null);
+      setControlError(errorToMessage(cancelError, "Failed to cancel job."));
     }
   }
 
@@ -1758,7 +1999,7 @@ function App() {
       startTransition(() => {
         setArtifactPreviewPath(path);
         setArtifactPreviewBody(null);
-        setArtifactPreviewError(artifactError instanceof Error ? artifactError.message : "读取产物失败。");
+        setArtifactPreviewError(errorToMessage(artifactError, "Failed to preview artifact."));
       });
     }
   }
@@ -1768,16 +2009,10 @@ function App() {
       const loaded = await loadControlArtifactText(path);
       const payload: unknown = JSON.parse(loaded.body);
       if (!isReplayData(payload)) {
-        throw new Error("这个产物不是合法的 replay JSON，无法载入舞台。");
+        throw new Error("Selected artifact is not a valid replay JSON payload.");
       }
+      commitReplay(payload, path, true, false);
       startTransition(() => {
-        setData(payload);
-        setError(null);
-        setSourceLabel(path);
-        setLastReloadedAt(new Date().toISOString());
-        setVisibleBeatCount(0);
-        setIsPlaying(false);
-        setHasAutoStarted(false);
         setArtifactPreviewPath(path);
         setArtifactPreviewBody(JSON.stringify(payload, null, 2));
         setArtifactPreviewError(null);
@@ -1786,7 +2021,7 @@ function App() {
       startTransition(() => {
         setArtifactPreviewPath(path);
         setArtifactPreviewBody(null);
-        setArtifactPreviewError(artifactError instanceof Error ? artifactError.message : "载入 replay 失败。");
+        setArtifactPreviewError(errorToMessage(artifactError, "Failed to load replay artifact."));
       });
     }
   }
@@ -1794,47 +2029,65 @@ function App() {
   return (
     <main className="page-shell" id="main-content">
       <a className="skip-link" href="#story-stage">
-        跳到会话主舞台
+        Skip To Session Stage
       </a>
 
       <section className="hero">
         <div className="hero-copy">
-          <p className="section-eyebrow">AutoSolver Agent 展示页</p>
-          <h1>把 AI Agent 的策略探索过程，做成一场外行也能看懂的会话演示</h1>
+          <p className="section-eyebrow">AutoSolver Dashboard</p>
+          <h1>Make Agent Reasoning And Solver Evidence Visible In One Place</h1>
           <p className="hero-text">
-            这一版不再像监控面板，而是更接近你给的 Kaggle Agent Session 示例：页面会把提案、工具调用、样例回传、判定和复盘串成一段连续动画，
-            让观众像看直播一样理解 Agent 是怎么一步步找到更优策略的。
+            This view turns research logs into a readable timeline. Teammates can see what was tried, what succeeded, and how the next iteration was chosen.
           </p>
           <div className="hero-chips">
-            <span className="meta-chip">基准集 {summary?.benchmarkId ?? agent?.benchmarkId ?? "暂无"}</span>
-            <span className="meta-chip">模型 {agent?.provider ?? "暂无"}</span>
-            <span className="meta-chip">{agent?.llmEnabled ? "LLM 驱动" : "离线回退"}</span>
-            <span className="meta-chip">{autoRefreshEnabled ? "本地实时联动" : "静态回放"}</span>
+            <span className="meta-chip">Benchmark {summary?.benchmarkId ?? agent?.benchmarkId ?? "N/A"}</span>
+            <span className="meta-chip">Provider {agent?.provider ?? "N/A"}</span>
+            <span className="meta-chip">{agent?.llmEnabled ? "LLM mode" : "Fallback mode"}</span>
+            <span className="meta-chip">{autoRefreshEnabled ? "Live refresh enabled" : "Static snapshot"}</span>
           </div>
         </div>
         <div className="hero-metrics">
-          <MetricCard label="故事步骤" value={formatInteger(totalBeats)} detail="一场完整会话里，页面会展示的动作节点数。" tone="accent" />
-          <MetricCard label="保留轮次" value={formatInteger(visibleKeepCount)} detail="这些轮次被自动 judge 认可为更优结果。" />
-          <MetricCard label="淘汰轮次" value={formatInteger(visibleDiscardCount)} detail="这些尝试没赢，但会变成下一轮的经验。" />
-          <MetricCard label="失败轮次" value={formatInteger(visibleFailureCount)} detail="异常不会打断会话，而会被系统记住。" tone="quiet" />
-          <MetricCard label="最佳预计完单" value={formatCount(bestRound?.averageExpectedCompletedOrders ?? summary?.bestExpectedCompletedOrders)} detail="当前视图里最好的主目标成绩。" />
-          <MetricCard label="对应总成本" value={formatCount(bestRound?.averageTotalCost ?? summary?.bestTotalCost)} detail="在最优完单结果下，对应的成本表现。" />
+          <MetricCard label="Story Beats" value={formatInteger(totalBeats)} detail="Total timeline messages in this replay." tone="accent" />
+          <MetricCard label="Kept Rounds" value={formatInteger(visibleKeepCount)} detail="Rounds marked as improvements." />
+          <MetricCard label="Discarded Rounds" value={formatInteger(visibleDiscardCount)} detail="Rounds rejected by objective comparison." />
+          <MetricCard label="Failed Rounds" value={formatInteger(visibleFailureCount)} detail="Rounds that ended with execution errors." tone="quiet" />
+          <MetricCard
+            label="Best Expected Orders"
+            value={formatCount(bestRound?.averageExpectedCompletedOrders ?? summary?.bestExpectedCompletedOrders)}
+            detail="Best value found in visible rounds."
+          />
+          <MetricCard
+            label="Cost At Best"
+            value={formatCount(bestRound?.averageTotalCost ?? summary?.bestTotalCost)}
+            detail="Companion cost for the best expected-orders result."
+          />
         </div>
       </section>
 
       <ControlBar
         sourceLabel={sourceLabel}
         benchmarkId={summary?.benchmarkId ?? agent?.benchmarkId ?? null}
-        provider={agent?.provider ?? "暂无"}
+        provider={agent?.provider ?? "N/A"}
         autoRefreshEnabled={autoRefreshEnabled}
         lastReloadedAt={lastReloadedAt}
         onLoadLocalReplay={handleLoadLocalReplay}
-        onUseBundledReplay={handleUseBundledReplay}
+        onUseDemoReplay={() => {
+          void handleUseDemoReplay();
+        }}
+        onReloadLiveReplay={() => {
+          void loadLiveReplayWithFallback(true).catch((loadError) => {
+            setError(errorToMessage(loadError, "Failed to load live replay."));
+          });
+        }}
+        onToggleAutoRefresh={() => {
+          setAutoRefreshEnabled((current) => !current);
+        }}
       />
 
       <ControlConsole
         controlState={controlState}
         controlError={controlError}
+        controlNotice={controlNotice}
         isLaunching={isLaunching}
         draft={runDraft}
         presets={RUN_PRESETS}
@@ -1843,12 +2096,11 @@ function App() {
         artifactPreviewError={artifactPreviewError}
         onDraftChange={handleDraftChange}
         onApplyPreset={handleApplyPreset}
+        onUploadFile={handleUploadFile}
         onRun={handleRun}
         onCancel={handleCancel}
         onRefresh={() => {
-          void loadControlStatus().catch((loadError) => {
-            setControlError(loadError instanceof Error ? loadError.message : "刷新控制服务状态失败。");
-          });
+          void refreshControlState(false);
         }}
         onInspectArtifact={handleInspectArtifact}
         onLoadReplayArtifact={handleLoadReplayArtifact}
@@ -1889,22 +2141,22 @@ function App() {
       <section className="panel-grid">
         <section className="panel">
           <div className="panel-head">
-            <p className="section-eyebrow">走势</p>
-            <h2>每一轮实验的成绩是如何变化的</h2>
+            <p className="section-eyebrow">Trend</p>
+            <h2>How Round Outcomes Move Over Time</h2>
           </div>
           <ScoreChart rounds={shownRounds} />
         </section>
 
         <section className="panel">
           <div className="panel-head">
-            <p className="section-eyebrow">轮次摘要</p>
-            <h2>每一轮到底改了什么</h2>
+            <p className="section-eyebrow">Round Summary</p>
+            <h2>What Changed In Each Iteration</h2>
           </div>
           <div className="round-grid">
             {shownRounds.length > 0 ? (
               shownRounds.map((round) => <RoundCard key={round.experimentId} round={round} />)
             ) : (
-              <div className="empty-state">播放还没走到完整结果，或者当前 replay 里没有轮次摘要。</div>
+              <div className="empty-state">No round summaries available for current replay.</div>
             )}
           </div>
         </section>
@@ -1912,24 +2164,22 @@ function App() {
 
       <section className="panel">
         <div className="panel-head">
-          <p className="section-eyebrow">案例观察</p>
-          <h2>哪些 benchmark case 最难</h2>
+          <p className="section-eyebrow">Case View</p>
+          <h2>Which Benchmark Cases Are Hardest</h2>
         </div>
         <div className="case-grid">
           {caseLeaderboard.length > 0 ? (
-            caseLeaderboard.slice(0, 6).map((row, index) => (
-              <CaseCard key={row.caseId ?? row.instanceId ?? `case-${index}`} row={row} />
-            ))
+            caseLeaderboard.slice(0, 6).map((row, index) => <CaseCard key={row.caseId ?? row.instanceId ?? `case-${index}`} row={row} />)
           ) : (
-            <div className="empty-state">当前 replay 还没有生成 case 排行数据。</div>
+            <div className="empty-state">No case leaderboard data in current replay.</div>
           )}
         </div>
       </section>
 
       <section className="panel">
         <div className="panel-head">
-          <p className="section-eyebrow">给技术同学看</p>
-          <h2>保留原始事件流，方便核对和排查</h2>
+          <p className="section-eyebrow">Raw Log</p>
+          <h2>Full Event Payloads For Debugging</h2>
         </div>
         <DebugDrawer events={events} />
       </section>
@@ -1940,3 +2190,4 @@ function App() {
 }
 
 export default App;
+

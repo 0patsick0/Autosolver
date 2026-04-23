@@ -40,6 +40,26 @@ def build_parser() -> argparse.ArgumentParser:
     solve_parser.add_argument("--compare-small-llm", action="store_true")
     solve_parser.add_argument("--config-source", type=str, default=None, help="Research summary/state JSON containing an incumbent solver_config")
 
+    solve_validate_parser = subparsers.add_parser("solve-validate", help="Solve a single canonical instance and immediately validate the result")
+    solve_validate_parser.add_argument("instance", type=str)
+    solve_validate_parser.add_argument("--output", type=str, default="solve_result.json")
+    solve_validate_parser.add_argument("--submission-output", type=str, default=None)
+    solve_validate_parser.add_argument("--validation-output", type=str, default="validation_report.json")
+    solve_validate_parser.add_argument("--events", type=str, default=None)
+    solve_validate_parser.add_argument("--time-budget-ms", type=int, default=None)
+    solve_validate_parser.add_argument("--seed", type=int, default=0)
+    solve_validate_parser.add_argument("--top-k", type=int, default=None)
+    solve_validate_parser.add_argument("--config-source", type=str, default=None, help="Research summary/state JSON containing an incumbent solver_config")
+
+    solve_submit_parser = subparsers.add_parser("solve-submit", help="One-click solve -> validate -> submission artifact workflow")
+    solve_submit_parser.add_argument("instance", type=str)
+    solve_submit_parser.add_argument("--output-dir", type=str, default="submission_artifacts")
+    solve_submit_parser.add_argument("--events", type=str, default=None)
+    solve_submit_parser.add_argument("--time-budget-ms", type=int, default=None)
+    solve_submit_parser.add_argument("--seed", type=int, default=0)
+    solve_submit_parser.add_argument("--top-k", type=int, default=None)
+    solve_submit_parser.add_argument("--config-source", type=str, default=None, help="Research summary/state JSON containing an incumbent solver_config")
+
     benchmark_parser = subparsers.add_parser("benchmark", help="Benchmark a directory, single instance, or manifest JSON")
     benchmark_parser.add_argument("benchmark_path", type=str)
     benchmark_parser.add_argument("--output", type=str, default="benchmark_summary.json")
@@ -100,19 +120,23 @@ def solve(instance, time_budget_ms: int = 10_000, seed: int = 0, config: SolveCo
     return solver.solve(instance, time_budget_ms=time_budget_ms, seed=seed, config=effective_config)
 
 
-def _solve_command(args: argparse.Namespace) -> None:
-    instance = load_instance(args.instance)
+def _resolve_solve_config(args: argparse.Namespace) -> SolveConfig:
     if args.config_source:
         config = load_incumbent_solve_config(args.config_source)
         if args.time_budget_ms is not None:
             config = SolveConfig(**{**config.__dict__, "time_budget_ms": args.time_budget_ms})
         if args.top_k is not None:
             config = SolveConfig(**{**config.__dict__, "top_k_riders_per_order": args.top_k})
-    else:
-        config = SolveConfig(
-            time_budget_ms=args.time_budget_ms if args.time_budget_ms is not None else 10_000,
-            top_k_riders_per_order=args.top_k if args.top_k is not None else 3,
-        )
+        return config
+    return SolveConfig(
+        time_budget_ms=args.time_budget_ms if args.time_budget_ms is not None else 10_000,
+        top_k_riders_per_order=args.top_k if args.top_k is not None else 3,
+    )
+
+
+def _solve_command(args: argparse.Namespace) -> None:
+    instance = load_instance(args.instance)
+    config = _resolve_solve_config(args)
     event_writer = EventWriter(args.events) if args.events else None
     if event_writer is not None:
         event_writer.write(
@@ -146,6 +170,128 @@ def _solve_command(args: argparse.Namespace) -> None:
                 "elapsed_ms": result.elapsed_ms,
                 "status": result.status,
                 "config_source": args.config_source,
+            },
+        )
+
+
+def _solve_validate_command(args: argparse.Namespace) -> None:
+    instance = load_instance(args.instance)
+    config = _resolve_solve_config(args)
+    event_writer = EventWriter(args.events) if args.events else None
+    if event_writer is not None:
+        event_writer.write(
+            "solve.started",
+            {
+                "instance_id": instance.instance_id,
+                "time_budget_ms": config.time_budget_ms,
+                "config_source": args.config_source,
+            },
+        )
+
+    result = solve(instance, time_budget_ms=config.time_budget_ms, seed=args.seed, config=config)
+    write_solve_result(args.output, result)
+    if args.submission_output:
+        CanonicalSubmissionWriter().write(result, args.submission_output)
+
+    validation_report = validate_solution_payload(
+        instance,
+        {"format": "canonical-v1", "result": sanitize_json_value(result)},
+    )
+    write_json(args.validation_output, validation_report)
+
+    if event_writer is not None:
+        event_writer.write(
+            "solve.completed",
+            {
+                "instance_id": result.instance_id,
+                "solver_name": result.solver_name,
+                "expected_completed_orders": result.objective.expected_completed_orders,
+                "total_cost": result.objective.total_cost,
+                "elapsed_ms": result.elapsed_ms,
+                "status": result.status,
+                "config_source": args.config_source,
+            },
+        )
+        event_writer.write(
+            "solve.validated",
+            {
+                "instance_id": result.instance_id,
+                "is_valid": validation_report.is_valid,
+                "issue_count": len(validation_report.issues),
+                "validation_output": args.validation_output,
+            },
+        )
+
+
+def _solve_submit_command(args: argparse.Namespace) -> None:
+    output_dir = Path(args.output_dir)
+    solve_output = output_dir / "solve_result.json"
+    submission_output = output_dir / "submission.json"
+    validation_output = output_dir / "validation_report.json"
+    snapshot_output = output_dir / "submission_snapshot.json"
+
+    instance = load_instance(args.instance)
+    config = _resolve_solve_config(args)
+    event_writer = EventWriter(args.events) if args.events else None
+    if event_writer is not None:
+        event_writer.write(
+            "solve.started",
+            {
+                "instance_id": instance.instance_id,
+                "time_budget_ms": config.time_budget_ms,
+                "config_source": args.config_source,
+                "workflow": "solve-submit",
+            },
+        )
+
+    result = solve(instance, time_budget_ms=config.time_budget_ms, seed=args.seed, config=config)
+    write_solve_result(solve_output, result)
+    CanonicalSubmissionWriter().write(result, submission_output)
+    validation_report = validate_solution_payload(
+        instance,
+        {"format": "canonical-v1", "result": sanitize_json_value(result)},
+    )
+    write_json(validation_output, validation_report)
+
+    write_json(
+        snapshot_output,
+        {
+            "workflow": "solve-submit",
+            "instance_id": instance.instance_id,
+            "status": result.status,
+            "is_valid": validation_report.is_valid,
+            "issue_count": len(validation_report.issues),
+            "objective": result.objective,
+            "artifacts": {
+                "solve_result": str(solve_output),
+                "submission": str(submission_output),
+                "validation_report": str(validation_output),
+            },
+        },
+    )
+
+    if event_writer is not None:
+        event_writer.write(
+            "solve.completed",
+            {
+                "instance_id": result.instance_id,
+                "solver_name": result.solver_name,
+                "expected_completed_orders": result.objective.expected_completed_orders,
+                "total_cost": result.objective.total_cost,
+                "elapsed_ms": result.elapsed_ms,
+                "status": result.status,
+                "config_source": args.config_source,
+                "workflow": "solve-submit",
+            },
+        )
+        event_writer.write(
+            "solve.validated",
+            {
+                "instance_id": result.instance_id,
+                "is_valid": validation_report.is_valid,
+                "issue_count": len(validation_report.issues),
+                "validation_output": str(validation_output),
+                "workflow": "solve-submit",
             },
         )
 
@@ -666,6 +812,8 @@ def main() -> None:
     args = parser.parse_args()
     command_handlers = {
         "solve": _solve_command,
+        "solve-validate": _solve_validate_command,
+        "solve-submit": _solve_submit_command,
         "benchmark": _benchmark_command,
         "research": _research_command,
         "replay": _replay_command,

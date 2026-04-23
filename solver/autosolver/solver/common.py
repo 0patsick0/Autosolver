@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from autosolver.core.models import CandidateOption, CanonicalInstance, LexicographicScore, OrderDispatch, SolveResult
+from autosolver.core.models import CandidateOption, CanonicalInstance, LexicographicScore, OrderDispatch, SolveConfig, SolveResult
 
 
 def build_result(
@@ -49,16 +49,23 @@ def build_result(
     )
 
 
-def can_take_option(option: CandidateOption, covered_orders: set[str], rider_remaining: dict[str, int]) -> bool:
+def rider_consumption_for_option(option: CandidateOption, config: SolveConfig) -> dict[str, int]:
+    if config.capacity_consumption_mode == "orders":
+        consumed = len(option.order_ids)
+        return {rider_id: consumed for rider_id in option.rider_ids}
+    return {rider_id: 1 for rider_id in option.rider_ids}
+
+
+def can_take_option(option: CandidateOption, covered_orders: set[str], rider_remaining: dict[str, int], config: SolveConfig) -> bool:
     if any(order_id in covered_orders for order_id in option.order_ids):
         return False
-    for rider_id in option.rider_ids:
-        if rider_remaining.get(rider_id, 0) <= 0:
+    for rider_id, consumed in rider_consumption_for_option(option, config).items():
+        if rider_remaining.get(rider_id, 0) < consumed:
             return False
     return True
 
 
-def apply_option(option: CandidateOption, covered_orders: set[str], rider_remaining: dict[str, int]) -> None:
+def apply_option(option: CandidateOption, covered_orders: set[str], rider_remaining: dict[str, int], config: SolveConfig) -> None:
     covered_orders.update(option.order_ids)
-    for rider_id in option.rider_ids:
-        rider_remaining[rider_id] = rider_remaining.get(rider_id, 0) - 1
+    for rider_id, consumed in rider_consumption_for_option(option, config).items():
+        rider_remaining[rider_id] = rider_remaining.get(rider_id, 0) - consumed

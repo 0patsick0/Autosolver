@@ -81,6 +81,8 @@ class CanonicalInstance:
 
 
 CandidateKind = Literal["single", "multi_assign", "bundle"]
+CapacityConsumptionMode = Literal["dispatch", "orders"]
+SolveStatus = Literal["ok", "infeasible", "error"]
 ExperimentStatus = Literal["keep", "discard", "crash"]
 
 
@@ -130,8 +132,12 @@ class SolveConfig:
     bundle_distance_threshold: float = 2.5
     bundle_discount_factor: float = 0.92
     bundle_acceptance_scale: float = 0.95
+    capacity_consumption_mode: CapacityConsumptionMode = "dispatch"
+    cpsat_quick_pass_ms: int = 160
+    cpsat_full_pass_ratio: float = 0.7
     lns_destroy_fraction: float = 0.25
     lns_iterations: int = 24
+    lns_restarts: int = 2
     allow_llm_baseline: bool = False
 
 
@@ -139,7 +145,7 @@ class SolveConfig:
 class SolveResult:
     instance_id: str
     solver_name: str
-    status: str
+    status: SolveStatus
     objective: LexicographicScore
     selected_option_ids: tuple[str, ...]
     dispatches: tuple[OrderDispatch, ...]

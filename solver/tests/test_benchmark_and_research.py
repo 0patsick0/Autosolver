@@ -139,6 +139,19 @@ class TestBenchmarkAndResearch:
         assert len(summary.case_metrics) == 3
         assert summary.total_weight > 0
 
+    def test_benchmark_repeat_cases_use_offset_seeds(self):
+        benchmark_id, cases, metadata = load_benchmark_cases("examples/benchmarks/benchmark_manifest.json")
+        summary = benchmark_instances(
+            cases=cases,
+            solver=PortfolioSolver(),
+            config=SolveConfig(time_budget_ms=400),
+            seed=11,
+            benchmark_id=benchmark_id,
+            metadata=metadata,
+        )
+        seeds = [metric.seed for metric in summary.case_metrics]
+        assert len(seeds) == len(set(seeds))
+
     def test_research_runner_writes_history_and_events(self, tmp_path: Path):
         output_path = tmp_path / "research.json"
         events_path = tmp_path / "research.jsonl"
@@ -503,6 +516,7 @@ class TestBenchmarkAndResearch:
         assert isinstance(strategy_memory, dict)
         assert "regime_tags" in strategy_memory
         assert "exploration_gaps" in strategy_memory
+        assert "strategy_templates" in provider.last_payload
 
     def test_heuristic_reflection_explains_regression_against_incumbent(self):
         record = ExperimentRecord(
@@ -530,7 +544,7 @@ class TestBenchmarkAndResearch:
 
         reflection = _heuristic_reflection(incumbent_summary, record)
 
-        assert "没有超过 incumbent" in reflection["summary"]
+        assert "did not beat the incumbent" in reflection["summary"]
         assert reflection["next_focus"]
 
     def test_judge_keeps_tied_objective_when_candidate_is_faster(self):
@@ -844,3 +858,4 @@ class TestBenchmarkAndResearch:
         assert replay["agent"]["proposalBreakdown"]["fallback"] >= 1
         assert replay["roundInsights"]
         assert replay["caseLeaderboard"]
+        assert summary["deployment"]["baseline"]["elapsed_ms"] <= 10_000

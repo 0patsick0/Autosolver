@@ -17,4 +17,5 @@ Rules:
 - When changing a strong incumbent, prefer 1 to 3 coordinated knob changes instead of a full random reset.
 - If your first idea is too close to a recent failed signature, change the exact conflicting knobs before returning the proposal.
 - Use the search space deliberately. Consider rider top-k, bundle candidate pool size, maximum bundle size, bundle distance threshold, bundle discount, bundle acceptance scaling, CP-SAT, and LNS settings when forming the hypothesis.
+- You may set `strategy_template` to one of: `greedy-first`, `cpsat-heavy`, `lns-heavy`, `bundle-aggressive`.
 - Never propose code edits. Only propose strategy and parameter configurations.

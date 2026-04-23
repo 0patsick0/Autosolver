@@ -24,8 +24,9 @@ def benchmark_instances(
     weighted_cost = 0.0
     total_weight = 0.0
 
-    for case in cases:
-        result = solver.solve(case.instance, time_budget_ms=config.time_budget_ms, seed=seed, config=config)
+    for case_index, case in enumerate(cases):
+        case_seed = seed + case_index
+        result = solver.solve(case.instance, time_budget_ms=config.time_budget_ms, seed=case_seed, config=config)
         case_metric = BenchmarkCaseMetric(
             instance_id=case.instance.instance_id,
             expected_completed_orders=result.objective.expected_completed_orders,
@@ -36,7 +37,7 @@ def benchmark_instances(
             case_id=case.case_id,
             source_path=case.source_path,
             weight=case.weight,
-            seed=seed,
+            seed=case_seed,
         )
         case_metrics.append(case_metric)
         total_elapsed_ms += result.elapsed_ms

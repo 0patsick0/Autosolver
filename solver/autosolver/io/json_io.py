@@ -73,8 +73,12 @@ def solve_config_from_raw(raw: dict[str, Any]) -> SolveConfig:
         bundle_distance_threshold=float(raw.get("bundle_distance_threshold", 2.5)),
         bundle_discount_factor=float(raw.get("bundle_discount_factor", 0.92)),
         bundle_acceptance_scale=float(raw.get("bundle_acceptance_scale", 0.95)),
+        capacity_consumption_mode=str(raw.get("capacity_consumption_mode", "dispatch")),
+        cpsat_quick_pass_ms=int(raw.get("cpsat_quick_pass_ms", 160)),
+        cpsat_full_pass_ratio=float(raw.get("cpsat_full_pass_ratio", 0.7)),
         lns_destroy_fraction=float(raw.get("lns_destroy_fraction", 0.25)),
         lns_iterations=int(raw.get("lns_iterations", 24)),
+        lns_restarts=int(raw.get("lns_restarts", 2)),
         allow_llm_baseline=bool(raw.get("allow_llm_baseline", False)),
     )
 

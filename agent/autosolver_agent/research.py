@@ -1,7 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import ast
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,6 +56,43 @@ LESSON_KEYWORDS = {
     "rider": ["top_k_riders_per_order"],
 }
 
+STRATEGY_TEMPLATES: dict[str, dict[str, object]] = {
+    "greedy-first": {
+        "use_cpsat": False,
+        "use_lns": True,
+        "lns_iterations": 28,
+        "lns_restarts": 3,
+        "bundle_candidate_pool_size": 6,
+    },
+    "cpsat-heavy": {
+        "use_cpsat": True,
+        "use_lns": False,
+        "cpsat_quick_pass_ms": 220,
+        "cpsat_full_pass_ratio": 0.85,
+    },
+    "lns-heavy": {
+        "use_cpsat": True,
+        "use_lns": True,
+        "lns_iterations": 36,
+        "lns_restarts": 4,
+        "lns_destroy_fraction": 0.3,
+    },
+    "bundle-aggressive": {
+        "use_cpsat": True,
+        "generate_bundles_if_missing": True,
+        "bundle_candidate_pool_size": 8,
+        "max_generated_bundles": 64,
+        "max_bundle_size": 3,
+    },
+}
+
+REGIME_STRATEGY_PRIORITIES: dict[str, tuple[str, ...]] = {
+    "rider_constrained": ("bundle-aggressive", "lns-heavy", "cpsat-heavy", "greedy-first"),
+    "bundle_sparse": ("bundle-aggressive", "cpsat-heavy", "lns-heavy", "greedy-first"),
+    "bundle_rich": ("cpsat-heavy", "lns-heavy", "bundle-aggressive", "greedy-first"),
+    "large_instances": ("lns-heavy", "greedy-first", "bundle-aggressive", "cpsat-heavy"),
+}
+
 
 @dataclass
 class ResearchMemory:
@@ -73,7 +111,8 @@ class RuleBasedProposer:
     def propose(self, memory: ResearchMemory, benchmark_id: str, time_budget_ms: int, round_index: int) -> ExperimentSpec:
         strategy_memory = _search_memory_digest(memory, self.search_space, self.benchmark_profile)
         prioritized_keys = _prioritized_search_keys(memory, self.benchmark_profile)
-        base_config = _base_solver_config(memory, time_budget_ms)
+        strategy_template = _select_strategy_template(memory, self.benchmark_profile, round_index)
+        base_config = _with_strategy_template(_base_solver_config(memory, time_budget_ms), strategy_template)
         preferred_values = _preferred_value_orders(memory.history, self.search_space)
         blocked_values = _blocked_value_orders(memory.history, self.search_space)
         solver_config = base_config
@@ -89,56 +128,101 @@ class RuleBasedProposer:
                 round_index=round_index,
                 attempt=attempt,
                 benchmark_profile=self.benchmark_profile,
+                strategy_template=strategy_template,
             )
             if not _is_redundant_config(solver_config, memory):
                 break
         else:
             for attempt in range(32):
                 offset = round_index + attempt
-                solver_config = SolveConfig(
-                    time_budget_ms=time_budget_ms,
-                    top_k_riders_per_order=int(
-                        _pick_unblocked(self.search_space, "top_k_riders_per_order", offset, 3, blocked_values)
-                    ),
-                    use_cpsat=bool(_pick_unblocked(self.search_space, "use_cpsat", offset, True, blocked_values)),
-                    use_lns=True,
-                    generate_bundles_if_missing=bool(
-                        _pick_unblocked(self.search_space, "generate_bundles_if_missing", offset, True, blocked_values)
-                    ),
-                    bundle_candidate_pool_size=int(
-                        _pick_unblocked(self.search_space, "bundle_candidate_pool_size", offset, 6, blocked_values)
-                    ),
-                    max_bundle_size=int(_pick_unblocked(self.search_space, "max_bundle_size", offset, 3, blocked_values)),
-                    bundle_distance_threshold=float(
-                        _pick_unblocked(self.search_space, "bundle_distance_threshold", offset, 2.5, blocked_values)
-                    ),
-                    bundle_discount_factor=float(
-                        _pick_unblocked(self.search_space, "bundle_discount_factor", offset, 0.92, blocked_values)
-                    ),
-                    bundle_acceptance_scale=float(
-                        _pick_unblocked(self.search_space, "bundle_acceptance_scale", offset, 0.95, blocked_values)
-                    ),
-                    max_generated_bundles=int(
-                        _pick_unblocked(self.search_space, "max_generated_bundles", offset, 64, blocked_values)
-                    ),
-                    lns_destroy_fraction=float(
-                        _pick_unblocked(self.search_space, "lns_destroy_fraction", offset, 0.25, blocked_values)
-                    ),
-                    lns_iterations=int(_pick_unblocked(self.search_space, "lns_iterations", offset, 24, blocked_values)),
+                raw = base_config.__dict__.copy()
+                raw["top_k_riders_per_order"] = int(
+                    _pick_unblocked(self.search_space, "top_k_riders_per_order", offset, raw.get("top_k_riders_per_order", 3), blocked_values)
                 )
+                raw["use_cpsat"] = bool(_pick_unblocked(self.search_space, "use_cpsat", offset, raw.get("use_cpsat", True), blocked_values))
+                raw["generate_bundles_if_missing"] = bool(
+                    _pick_unblocked(
+                        self.search_space,
+                        "generate_bundles_if_missing",
+                        offset,
+                        raw.get("generate_bundles_if_missing", True),
+                        blocked_values,
+                    )
+                )
+                raw["bundle_candidate_pool_size"] = int(
+                    _pick_unblocked(
+                        self.search_space,
+                        "bundle_candidate_pool_size",
+                        offset,
+                        raw.get("bundle_candidate_pool_size", 6),
+                        blocked_values,
+                    )
+                )
+                raw["max_bundle_size"] = int(
+                    _pick_unblocked(self.search_space, "max_bundle_size", offset, raw.get("max_bundle_size", 3), blocked_values)
+                )
+                raw["bundle_distance_threshold"] = float(
+                    _pick_unblocked(
+                        self.search_space,
+                        "bundle_distance_threshold",
+                        offset,
+                        raw.get("bundle_distance_threshold", 2.5),
+                        blocked_values,
+                    )
+                )
+                raw["bundle_discount_factor"] = float(
+                    _pick_unblocked(
+                        self.search_space,
+                        "bundle_discount_factor",
+                        offset,
+                        raw.get("bundle_discount_factor", 0.92),
+                        blocked_values,
+                    )
+                )
+                raw["bundle_acceptance_scale"] = float(
+                    _pick_unblocked(
+                        self.search_space,
+                        "bundle_acceptance_scale",
+                        offset,
+                        raw.get("bundle_acceptance_scale", 0.95),
+                        blocked_values,
+                    )
+                )
+                raw["max_generated_bundles"] = int(
+                    _pick_unblocked(
+                        self.search_space,
+                        "max_generated_bundles",
+                        offset,
+                        raw.get("max_generated_bundles", 64),
+                        blocked_values,
+                    )
+                )
+                raw["lns_destroy_fraction"] = float(
+                    _pick_unblocked(
+                        self.search_space,
+                        "lns_destroy_fraction",
+                        offset,
+                        raw.get("lns_destroy_fraction", 0.25),
+                        blocked_values,
+                    )
+                )
+                raw["lns_iterations"] = int(
+                    _pick_unblocked(self.search_space, "lns_iterations", offset, raw.get("lns_iterations", 24), blocked_values)
+                )
+                solver_config = SolveConfig(**raw)
                 if _config_signature(solver_config) not in memory.seen_signatures:
                     break
         return ExperimentSpec(
             experiment_id=f"exp-{round_index + 1}",
             name=f"rule-based-{round_index + 1}",
             hypothesis=(
-                "Adjust top_k, bundle generation, and local search neighborhood "
+                f"Apply {strategy_template} and adjust top_k, bundle generation, and local search neighborhood "
                 f"for benchmark {benchmark_id} under regimes {strategy_memory['regime_tags']} "
                 f"with config {_config_signature(solver_config)}."
             ),
             solver_config=solver_config,
             benchmark_ids=(benchmark_id,),
-            notes="fallback-proposer",
+            notes=f"fallback-proposer:template={strategy_template}",
         )
 
 
@@ -152,7 +236,8 @@ class LLMExperimentProposer:
     def propose(self, memory: ResearchMemory, benchmark_id: str, time_budget_ms: int, round_index: int) -> ExperimentSpec:
         strategy_memory = _search_memory_digest(memory, self.search_space, self.benchmark_profile)
         prioritized_keys = _prioritized_search_keys(memory, self.benchmark_profile)
-        base_config = _base_solver_config(memory, time_budget_ms)
+        recommended_template = _select_strategy_template(memory, self.benchmark_profile, round_index)
+        base_config = _with_strategy_template(_base_solver_config(memory, time_budget_ms), recommended_template)
         history = [
             {
                 "experiment_id": record.experiment_id,
@@ -178,6 +263,11 @@ class LLMExperimentProposer:
                     "time_budget_ms": time_budget_ms,
                     "search_space": self.search_space,
                     "benchmark_profile": self.benchmark_profile,
+                    "strategy_templates": {
+                        "available": sorted(STRATEGY_TEMPLATES.keys()),
+                        "recommended": recommended_template,
+                        "ranked": _ranked_strategy_templates(memory, self.benchmark_profile, round_index),
+                    },
                     "search_hints": {
                         "priority_knobs": prioritized_keys[:6],
                     },
@@ -194,32 +284,79 @@ class LLMExperimentProposer:
         )
         parameter_hints = _extract_parameter_hints(response)
         resolved_response = {**parameter_hints, **response}
+        strategy_template = _resolve_strategy_template(
+            resolved_response.get("strategy_template"),
+            fallback=recommended_template,
+        )
+        template_config = _with_strategy_template(base_config, strategy_template)
         solver_config = SolveConfig(
             time_budget_ms=time_budget_ms,
-            top_k_riders_per_order=int(_coerce_allowed(resolved_response.get("top_k_riders_per_order"), self.search_space["top_k_riders_per_order"], 3)),
-            use_cpsat=bool(_coerce_allowed(resolved_response.get("use_cpsat"), self.search_space["use_cpsat"], True)),
-            use_lns=True,
+            top_k_riders_per_order=int(
+                _coerce_allowed(
+                    resolved_response.get("top_k_riders_per_order"),
+                    self.search_space["top_k_riders_per_order"],
+                    template_config.top_k_riders_per_order,
+                )
+            ),
+            use_cpsat=bool(_coerce_allowed(resolved_response.get("use_cpsat"), self.search_space["use_cpsat"], template_config.use_cpsat)),
+            use_lns=template_config.use_lns,
+            cpsat_max_orders=template_config.cpsat_max_orders,
             generate_bundles_if_missing=bool(
-                _coerce_allowed(resolved_response.get("generate_bundles_if_missing"), self.search_space["generate_bundles_if_missing"], True)
+                _coerce_allowed(
+                    resolved_response.get("generate_bundles_if_missing"),
+                    self.search_space["generate_bundles_if_missing"],
+                    template_config.generate_bundles_if_missing,
+                )
             ),
             bundle_candidate_pool_size=int(
-                _coerce_allowed(resolved_response.get("bundle_candidate_pool_size"), self.search_space["bundle_candidate_pool_size"], 6)
+                _coerce_allowed(
+                    resolved_response.get("bundle_candidate_pool_size"),
+                    self.search_space["bundle_candidate_pool_size"],
+                    template_config.bundle_candidate_pool_size,
+                )
             ),
-            max_bundle_size=int(_coerce_allowed(resolved_response.get("max_bundle_size"), self.search_space["max_bundle_size"], 3)),
+            max_bundle_size=int(_coerce_allowed(resolved_response.get("max_bundle_size"), self.search_space["max_bundle_size"], template_config.max_bundle_size)),
             bundle_distance_threshold=float(
-                _coerce_allowed(resolved_response.get("bundle_distance_threshold"), self.search_space["bundle_distance_threshold"], 2.5)
+                _coerce_allowed(
+                    resolved_response.get("bundle_distance_threshold"),
+                    self.search_space["bundle_distance_threshold"],
+                    template_config.bundle_distance_threshold,
+                )
             ),
             bundle_discount_factor=float(
-                _coerce_allowed(resolved_response.get("bundle_discount_factor"), self.search_space["bundle_discount_factor"], 0.92)
+                _coerce_allowed(
+                    resolved_response.get("bundle_discount_factor"),
+                    self.search_space["bundle_discount_factor"],
+                    template_config.bundle_discount_factor,
+                )
             ),
             bundle_acceptance_scale=float(
-                _coerce_allowed(resolved_response.get("bundle_acceptance_scale"), self.search_space["bundle_acceptance_scale"], 0.95)
+                _coerce_allowed(
+                    resolved_response.get("bundle_acceptance_scale"),
+                    self.search_space["bundle_acceptance_scale"],
+                    template_config.bundle_acceptance_scale,
+                )
             ),
-            max_generated_bundles=int(_coerce_allowed(resolved_response.get("max_generated_bundles"), self.search_space["max_generated_bundles"], 64)),
+            max_generated_bundles=int(
+                _coerce_allowed(
+                    resolved_response.get("max_generated_bundles"),
+                    self.search_space["max_generated_bundles"],
+                    template_config.max_generated_bundles,
+                )
+            ),
+            capacity_consumption_mode=template_config.capacity_consumption_mode,
+            cpsat_quick_pass_ms=template_config.cpsat_quick_pass_ms,
+            cpsat_full_pass_ratio=template_config.cpsat_full_pass_ratio,
             lns_destroy_fraction=float(
-                _coerce_allowed(resolved_response.get("lns_destroy_fraction"), self.search_space["lns_destroy_fraction"], 0.25)
+                _coerce_allowed(
+                    resolved_response.get("lns_destroy_fraction"),
+                    self.search_space["lns_destroy_fraction"],
+                    template_config.lns_destroy_fraction,
+                )
             ),
-            lns_iterations=int(_coerce_allowed(resolved_response.get("lns_iterations"), self.search_space["lns_iterations"], 24)),
+            lns_iterations=int(_coerce_allowed(resolved_response.get("lns_iterations"), self.search_space["lns_iterations"], template_config.lns_iterations)),
+            lns_restarts=template_config.lns_restarts,
+            allow_llm_baseline=template_config.allow_llm_baseline,
         )
         solver_config, repair_reasons = _repair_proposed_solver_config(
             config=solver_config,
@@ -231,8 +368,9 @@ class LLMExperimentProposer:
             memory=memory,
             round_index=round_index,
             benchmark_profile=self.benchmark_profile,
+            strategy_template=strategy_template,
         )
-        notes = "llm-proposer"
+        notes = f"llm-proposer:template={strategy_template}"
         if repair_reasons:
             notes = f"{notes}:{'+'.join(repair_reasons)}"
         return ExperimentSpec(
@@ -765,8 +903,12 @@ def _solver_config_from_raw(raw: Any) -> SolveConfig | None:
         bundle_distance_threshold=float(raw.get("bundle_distance_threshold", 2.5)),
         bundle_discount_factor=float(raw.get("bundle_discount_factor", 0.92)),
         bundle_acceptance_scale=float(raw.get("bundle_acceptance_scale", 0.95)),
+        capacity_consumption_mode=str(raw.get("capacity_consumption_mode", "dispatch")),
+        cpsat_quick_pass_ms=int(raw.get("cpsat_quick_pass_ms", 160)),
+        cpsat_full_pass_ratio=float(raw.get("cpsat_full_pass_ratio", 0.7)),
         lns_destroy_fraction=float(raw.get("lns_destroy_fraction", 0.25)),
         lns_iterations=int(raw.get("lns_iterations", 24)),
+        lns_restarts=int(raw.get("lns_restarts", 2)),
         allow_llm_baseline=bool(raw.get("allow_llm_baseline", False)),
     )
 
@@ -840,6 +982,78 @@ def _base_solver_config(memory: ResearchMemory, time_budget_ms: int) -> SolveCon
         incumbent_config["time_budget_ms"] = time_budget_ms
         return SolveConfig(**incumbent_config)
     return SolveConfig(time_budget_ms=time_budget_ms)
+
+
+def _with_strategy_template(config: SolveConfig, strategy_template: str) -> SolveConfig:
+    overrides = STRATEGY_TEMPLATES.get(strategy_template, {})
+    if not overrides:
+        return config
+    raw = config.__dict__.copy()
+    raw.update(overrides)
+    return SolveConfig(**raw)
+
+
+def _resolve_strategy_template(value: object, fallback: str) -> str:
+    if isinstance(value, str) and value in STRATEGY_TEMPLATES:
+        return value
+    return fallback if fallback in STRATEGY_TEMPLATES else "cpsat-heavy"
+
+
+def _strategy_template_from_notes(notes: str) -> str | None:
+    marker = "template="
+    if marker not in notes:
+        return None
+    suffix = notes.split(marker, 1)[1]
+    candidate = suffix.split(":", 1)[0].strip()
+    if candidate in STRATEGY_TEMPLATES:
+        return candidate
+    return None
+
+
+def _strategy_template_stats(memory: ResearchMemory) -> dict[str, dict[str, int]]:
+    stats = {name: {"runs": 0, "keep": 0, "discard": 0, "crash": 0} for name in STRATEGY_TEMPLATES}
+    for record in memory.history:
+        template = _strategy_template_from_notes(record.notes)
+        if template is None:
+            continue
+        stats[template]["runs"] += 1
+        stats[template][record.status] = stats[template].get(record.status, 0) + 1
+    return stats
+
+
+def _ranked_strategy_templates(memory: ResearchMemory, benchmark_profile: dict[str, object], round_index: int) -> list[str]:
+    stats = _strategy_template_stats(memory)
+    regime_tags = _regime_tags(benchmark_profile)
+    total_runs = max(1, sum(stats[name]["runs"] for name in stats))
+    regime_rank_bonus = {name: 0.0 for name in STRATEGY_TEMPLATES}
+    for tag in regime_tags:
+        preferred = REGIME_STRATEGY_PRIORITIES.get(tag, ())
+        for rank, name in enumerate(preferred):
+            regime_rank_bonus[name] += max(0.0, 0.25 - 0.06 * rank)
+
+    scored: list[tuple[float, str]] = []
+    for name in STRATEGY_TEMPLATES:
+        run_count = stats[name]["runs"]
+        keep_count = stats[name]["keep"]
+        exploitation = (keep_count + 0.5) / (run_count + 1.0)
+        exploration = 0.6 * ((math.log(total_runs + 1.0) / (run_count + 1.0)) ** 0.5)
+        scored.append((exploitation + exploration + regime_rank_bonus[name], name))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    ranked = [name for _, name in scored]
+    if round_index < len(ranked):
+        # Early rounds force broad exploration across templates.
+        return ranked[round_index:] + ranked[:round_index]
+    return ranked
+
+
+def _select_strategy_template(memory: ResearchMemory, benchmark_profile: dict[str, object], round_index: int) -> str:
+    ranked = _ranked_strategy_templates(memory, benchmark_profile, round_index)
+    if not ranked:
+        return "cpsat-heavy"
+    if _high_stagnation(memory) and len(ranked) > 1:
+        return ranked[1]
+    return ranked[0]
 
 
 def _prioritized_search_keys(memory: ResearchMemory, benchmark_profile: dict[str, object]) -> list[str]:
@@ -1048,6 +1262,8 @@ def _search_memory_digest(
             }
         )
 
+    ranked_templates = _ranked_strategy_templates(memory, benchmark_profile, len(memory.history))
+    template_stats = _strategy_template_stats(memory)
     return {
         "regime_tags": _regime_tags(benchmark_profile),
         "priority_knobs": prioritized_keys[:6],
@@ -1056,6 +1272,11 @@ def _search_memory_digest(
         "exploration_gaps": exploration_gaps[:6],
         "recent_failures": recent_failures[:4],
         "stagnating": _high_stagnation(memory),
+        "strategy_templates": {
+            "recommended": ranked_templates[0] if ranked_templates else "cpsat-heavy",
+            "ranked": ranked_templates,
+            "stats": template_stats,
+        },
     }
 
 
@@ -1101,10 +1322,12 @@ def _repair_proposed_solver_config(
     memory: ResearchMemory,
     round_index: int,
     benchmark_profile: dict[str, object],
+    strategy_template: str,
 ) -> tuple[SolveConfig, list[str]]:
     repair_reasons: list[str] = []
     dominant_bad_values = _dominant_bad_values(memory.history, search_space)
     raw = config.__dict__.copy()
+    _apply_strategy_template(raw, strategy_template)
 
     for key, bad_values in dominant_bad_values.items():
         if raw.get(key) in bad_values:
@@ -1124,7 +1347,7 @@ def _repair_proposed_solver_config(
 
     repair_reasons.append("novelty")
     focus_keys = _repair_focus_keys(repaired.__dict__, dominant_bad_values, prioritized_keys)
-    seed_configs = [repaired, base_config]
+    seed_configs = [repaired, _with_strategy_template(base_config, strategy_template)]
 
     for attempt in range(24):
         seed_config = seed_configs[attempt % len(seed_configs)]
@@ -1141,6 +1364,7 @@ def _repair_proposed_solver_config(
                 round_index + attempt + key_index + 1,
                 blocked_values.get(key, []),
             )
+        _apply_strategy_template(candidate_raw, strategy_template)
         _apply_benchmark_biases(candidate_raw, benchmark_profile, memory)
         candidate = SolveConfig(**candidate_raw)
         if not _is_redundant_config(candidate, memory):
@@ -1172,11 +1396,11 @@ def _heuristic_reflection(incumbent_summary: BenchmarkSummary | None, record: Ex
     )
     if incumbent_summary is None:
         return {
-            "summary": "首轮实验建立了基线，可继续围绕当前配置做局部搜索。",
-            "keep_reason": "当前没有 incumbent，因此这轮结果会成为后续比较基线。",
-            "risks": ["当前启发式反思没有使用外部 LLM，描述粒度较粗。"],
-            "next_focus": ["围绕当前配置的小范围变异继续探索。"],
-            "avoid_patterns": ["避免重复完全相同的配置。"],
+            "summary": "First round established a baseline for this benchmark.",
+            "keep_reason": "No incumbent existed, so this result becomes the current baseline.",
+            "risks": ["The reflection is heuristic-only and may miss subtle search signals."],
+            "next_focus": ["Run small, targeted knob changes around the current baseline."],
+            "avoid_patterns": ["Avoid repeating exactly the same configuration."],
         }
 
     incumbent_score = LexicographicScore(
@@ -1189,26 +1413,25 @@ def _heuristic_reflection(incumbent_summary: BenchmarkSummary | None, record: Ex
     if improved:
         return {
             "summary": (
-                f"这轮启发式上优于旧 incumbent，预计完单提升 {delta_expected:.3f}，"
-                f"成本变化 {delta_cost:.3f}。"
+                f"This round beat the incumbent, with expected-completion delta {delta_expected:.3f} "
+                f"and cost delta {delta_cost:.3f}."
             ),
-            "keep_reason": "主目标提升，因此值得保留为新的搜索锚点。",
-            "risks": ["收益来源还需要更多轮验证，避免把一次性波动当成稳定趋势。"],
-            "next_focus": ["围绕这组参数做 1 到 2 个旋钮的小步变异。"],
-            "avoid_patterns": ["不要一下子同时改太多参数，避免难以定位收益来源。"],
+            "keep_reason": "Primary objective improved, so this should be kept as the new anchor.",
+            "risks": ["Validate on more rounds to avoid overfitting to one benchmark pass."],
+            "next_focus": ["Try 1-2 nearby mutations around this winning configuration."],
+            "avoid_patterns": ["Avoid changing many knobs at once in the next round."],
         }
 
     return {
         "summary": (
-            f"这轮没有超过 incumbent，预计完单变化 {delta_expected:.3f}，"
-            f"成本变化 {delta_cost:.3f}。"
+            f"This round did not beat the incumbent, with expected-completion delta {delta_expected:.3f} "
+            f"and cost delta {delta_cost:.3f}."
         ),
-        "keep_reason": "主目标没有变好，应继续沿其它参数方向探索。",
-        "risks": ["如果连续多轮都不提升，当前搜索方向可能已经接近瓶颈。"],
-        "next_focus": ["优先调整 lesson 里提到的高影响旋钮。"],
-        "avoid_patterns": ["避免和最近被 discard 的配置只差一个低价值参数。"],
+        "keep_reason": "Primary objective regressed, so continue searching in other directions.",
+        "risks": ["Repeated regressions indicate the current direction may be saturated."],
+        "next_focus": ["Prioritize high-impact knobs referenced in recent lessons."],
+        "avoid_patterns": ["Avoid configs that differ by only one low-impact knob from recent discards."],
     }
-
 
 def _mutated_solver_config(
     base_config: SolveConfig,
@@ -1220,8 +1443,10 @@ def _mutated_solver_config(
     round_index: int,
     attempt: int,
     benchmark_profile: dict[str, object],
+    strategy_template: str,
 ) -> SolveConfig:
     raw = base_config.__dict__.copy()
+    _apply_strategy_template(raw, strategy_template)
     mutation_width = _adaptive_mutation_width(memory, round_index, attempt)
     if prioritized_keys:
         rotation = (round_index * 3 + attempt) % len(prioritized_keys)
@@ -1252,6 +1477,11 @@ def _adaptive_mutation_width(memory: ResearchMemory, round_index: int, attempt: 
     if any(record.status == "keep" for record in memory.history):
         return 1 + ((round_index + attempt) % 2)
     return 2 + ((round_index + attempt) % 2)
+
+
+def _apply_strategy_template(raw: dict[str, object], strategy_template: str) -> None:
+    for key, value in STRATEGY_TEMPLATES.get(strategy_template, {}).items():
+        raw[key] = value
 
 
 def _apply_benchmark_biases(raw: dict[str, object], benchmark_profile: dict[str, object], memory: ResearchMemory) -> None:

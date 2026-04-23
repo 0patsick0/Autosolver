@@ -50,9 +50,10 @@ def solve_small_instance_with_llm(instance: CanonicalInstance, provider: LLMProv
     rider_remaining = {rider.id: rider.capacity for rider in instance.riders}
     covered_orders: set[str] = set()
     selected: list[CandidateOption] = []
+    baseline_config = SolveConfig()
     for option in candidate_selection:
-        if can_take_option(option, covered_orders, rider_remaining):
-            apply_option(option, covered_orders, rider_remaining)
+        if can_take_option(option, covered_orders, rider_remaining, baseline_config):
+            apply_option(option, covered_orders, rider_remaining, baseline_config)
             selected.append(option)
     if not selected:
         return None

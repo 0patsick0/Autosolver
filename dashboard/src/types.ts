@@ -153,6 +153,7 @@ export interface ReplayData {
 }
 
 export const CONTROL_JOB_STATUS = {
+  QUEUED: "queued",
   RUNNING: "running",
   CANCELLING: "cancelling",
   SUCCEEDED: "succeeded",
@@ -201,6 +202,7 @@ export interface ControlState {
   defaults: ControlDefaults;
   provider: ControlProviderSummary;
   currentJob: ControlJob | null;
+  queuedJobs: ControlJob[];
   recentJobs: ControlJob[];
 }
 
@@ -367,6 +369,8 @@ export function isControlState(value: unknown): value is ControlState {
     isControlDefaults(value.defaults) &&
     isControlProviderSummary(value.provider) &&
     (value.currentJob === null || isControlJob(value.currentJob)) &&
+    Array.isArray(value.queuedJobs) &&
+    value.queuedJobs.every(isControlJob) &&
     Array.isArray(value.recentJobs) &&
     value.recentJobs.every(isControlJob)
   );

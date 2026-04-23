@@ -299,6 +299,9 @@ select {
   gap: 18px;
   margin-top: 24px;
   padding: 18px 22px;
+  position: sticky;
+  top: 8px;
+  z-index: 16;
 }
 
 .control-copy {
@@ -640,10 +643,9 @@ select {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-height: 720px;
-  max-height: 820px;
-  overflow-y: auto;
   padding: 20px;
+  min-height: 0;
+  overflow: visible;
 }
 
 .session-row {
@@ -722,16 +724,8 @@ select {
   border-color: rgba(255, 255, 255, 0.18);
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.08),
-    0 0 0 8px rgba(45, 212, 191, 0.08),
-    0 18px 40px rgba(0, 0, 0, 0.24);
-}
-
-.session-row-active .session-bubble::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(120deg, transparent 0%, rgba(255, 255, 255, 0.08) 45%, transparent 68%);
-  animation: sheen 1.6s linear infinite;
+    0 0 0 6px rgba(45, 212, 191, 0.06),
+    0 14px 28px rgba(0, 0, 0, 0.18);
 }
 
 .session-bubble-head {
@@ -821,6 +815,11 @@ select {
 .status-discard {
   background: rgba(179, 120, 24, 0.12);
   color: #8a5703;
+}
+
+.status-queued {
+  background: rgba(203, 93, 47, 0.14);
+  color: #8c3f1d;
 }
 
 .status-running,
@@ -1121,6 +1120,12 @@ select {
   gap: 8px;
 }
 
+.control-field-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .control-field span,
 .control-checkbox span,
 .command-preview strong,
@@ -1179,6 +1184,45 @@ select {
   margin-top: 18px;
 }
 
+.control-console-actions > .ghost-button,
+.control-console-actions > .primary-button {
+  min-width: 180px;
+}
+
+.upload-inline-button {
+  position: relative;
+  overflow: hidden;
+  min-height: 40px;
+  padding: 0 14px;
+  font-size: 0.88rem;
+}
+
+.queue-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(203, 93, 47, 0.18);
+  background: rgba(203, 93, 47, 0.1);
+  color: #7a391d;
+}
+
+.queue-banner strong {
+  font-size: 0.92rem;
+}
+
+.success-banner {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(79, 124, 59, 0.22);
+  background: rgba(79, 124, 59, 0.12);
+  color: #355527;
+}
+
 .control-console-status-grid {
   margin-top: 18px;
   grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
@@ -1226,6 +1270,8 @@ select {
   border-radius: 16px;
   border: 1px solid rgba(33, 23, 16, 0.08);
   background: rgba(255, 255, 255, 0.82);
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .command-preview code {
@@ -1270,6 +1316,20 @@ select {
   border-radius: 16px;
   border: 1px solid rgba(33, 23, 16, 0.08);
   background: rgba(255, 255, 255, 0.82);
+}
+
+.queue-history-list {
+  margin-top: 16px;
+}
+
+.queue-job-item {
+  background:
+    linear-gradient(135deg, rgba(255, 244, 236, 0.96), rgba(255, 255, 255, 0.9));
+  border-color: rgba(203, 93, 47, 0.16);
+}
+
+.queue-command-preview code {
+  background: #2a1a13;
 }
 
 @keyframes bubble-in {
@@ -1355,6 +1415,10 @@ select {
   .raw-log-head {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .control-bar {
+    position: static;
   }
 
   .control-actions,

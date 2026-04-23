@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import re
 import subprocess
 import threading
 from dataclasses import dataclass, field
@@ -20,6 +21,13 @@ DEFAULT_CONTROL_PORT = 8765
 DEFAULT_DASHBOARD_REPLAY_PATH = "dashboard/public/replay-data.json"
 MAX_LOG_LINES = 400
 MAX_FILE_BYTES = 2_000_000
+CONTROL_HISTORY_PATH = REPO_ROOT / "examples" / "web_runs" / "control_history.json"
+CONTROL_UPLOAD_ROOT = REPO_ROOT / "examples" / "web_uploads"
+UPLOAD_TARGET_DIRS = {
+    "benchmark": "benchmarks",
+    "instance": "instances",
+    "searchSpace": "search_spaces",
+}
 
 
 @dataclass(frozen=True)
@@ -121,6 +129,30 @@ def _resolve_repo_relative_path(path: str) -> Path:
     except ValueError as exc:
         raise ValueError("Path must stay inside the repository.") from exc
     return candidate
+
+
+def _sanitize_upload_filename(filename: str | None, fallback_stem: str) -> str:
+    raw_name = Path(filename or "").name
+    suffix = Path(raw_name).suffix.lower()
+    if suffix not in {".json", ".jsonl", ".txt", ".md"}:
+        suffix = ".json"
+    stem_source = Path(raw_name).stem or fallback_stem
+    safe_stem = re.sub(r"[^0-9A-Za-z_-]+", "-", stem_source).strip("-_") or fallback_stem
+    return f"{safe_stem}{suffix}"
+
+
+def store_uploaded_file(target: str, filename: str | None, content: str) -> str:
+    if target not in UPLOAD_TARGET_DIRS:
+        raise ValueError(f"Unsupported upload target: {target}")
+    payload = content.encode("utf-8")
+    if len(payload) > MAX_FILE_BYTES:
+        raise ValueError(f"Uploaded file is too large ({len(payload)} bytes).")
+    destination_root = CONTROL_UPLOAD_ROOT / UPLOAD_TARGET_DIRS[target]
+    destination_root.mkdir(parents=True, exist_ok=True)
+    safe_name = _sanitize_upload_filename(filename, target)
+    destination = destination_root / f"{_slug_now()}-{safe_name}"
+    destination.write_bytes(payload)
+    return _relative_to_repo(destination) or str(destination)
 
 
 def build_job_spec(payload: dict[str, object], defaults: ControlDefaults | None = None) -> JobSpec:
@@ -242,6 +274,75 @@ def build_job_spec(payload: dict[str, object], defaults: ControlDefaults | None 
             },
         )
 
+    if kind == "solve-validate":
+        solve_output = output_root / "solve_result.json"
+        submission_output = output_root / "submission.json"
+        validation_output = output_root / "validation_report.json"
+        events_path = output_root / "solve_validate.jsonl"
+        return JobSpec(
+            kind=kind,
+            command=[
+                "uv",
+                "run",
+                "autosolver",
+                "solve-validate",
+                instance_path,
+                "--output",
+                str(solve_output),
+                "--submission-output",
+                str(submission_output),
+                "--validation-output",
+                str(validation_output),
+                "--events",
+                str(events_path),
+                "--time-budget-ms",
+                str(time_budget_ms),
+                "--seed",
+                str(seed),
+            ],
+            output_root=_relative_to_repo(output_root),
+            artifacts={
+                "solveResult": _relative_to_repo(solve_output) or "",
+                "submission": _relative_to_repo(submission_output) or "",
+                "validationReport": _relative_to_repo(validation_output) or "",
+                "events": _relative_to_repo(events_path) or "",
+            },
+        )
+
+    if kind == "solve-submit":
+        output_dir = output_root / "submission_bundle"
+        solve_output = output_dir / "solve_result.json"
+        submission_output = output_dir / "submission.json"
+        validation_output = output_dir / "validation_report.json"
+        snapshot_output = output_dir / "submission_snapshot.json"
+        events_path = output_root / "solve_submit.jsonl"
+        return JobSpec(
+            kind=kind,
+            command=[
+                "uv",
+                "run",
+                "autosolver",
+                "solve-submit",
+                instance_path,
+                "--output-dir",
+                str(output_dir),
+                "--events",
+                str(events_path),
+                "--time-budget-ms",
+                str(time_budget_ms),
+                "--seed",
+                str(seed),
+            ],
+            output_root=_relative_to_repo(output_root),
+            artifacts={
+                "solveResult": _relative_to_repo(solve_output) or "",
+                "submission": _relative_to_repo(submission_output) or "",
+                "validationReport": _relative_to_repo(validation_output) or "",
+                "submissionSnapshot": _relative_to_repo(snapshot_output) or "",
+                "events": _relative_to_repo(events_path) or "",
+            },
+        )
+
     if kind != "research":
         raise ValueError(f"Unsupported control run kind: {kind}")
 
@@ -290,8 +391,12 @@ class ControlRuntime:
         self.port = DEFAULT_CONTROL_PORT
         self._lock = threading.Lock()
         self._current_job: ControlJob | None = None
+        self._queued_jobs: list[tuple[ControlJob, JobSpec]] = []
         self._recent_jobs: list[ControlJob] = []
         self._processes: dict[str, subprocess.Popen[str]] = {}
+        self._history_path = CONTROL_HISTORY_PATH
+        self._history_path.parent.mkdir(parents=True, exist_ok=True)
+        self._load_history()
 
     def configure_endpoint(self, host: str, port: int) -> None:
         self.host = host
@@ -301,6 +406,7 @@ class ControlRuntime:
         provider = OpenAICompatibleProvider.from_environment()
         with self._lock:
             current_job = self._current_job.snapshot() if self._current_job is not None else None
+            queued_jobs = [job.snapshot() for job, _ in self._queued_jobs[:6]]
             recent_jobs = [job.snapshot() for job in self._recent_jobs[:6]]
         return {
             "available": True,
@@ -321,42 +427,57 @@ class ControlRuntime:
                 "llmConfigured": provider.is_configured(),
             },
             "currentJob": current_job,
+            "queuedJobs": queued_jobs,
             "recentJobs": recent_jobs,
         }
 
     def launch(self, payload: dict[str, object]) -> dict[str, object]:
         spec = build_job_spec(payload, self.defaults)
         with self._lock:
-            if self._current_job is not None and self._current_job.status == "running":
-                raise RuntimeError("A control job is already running. Please wait for it to finish or cancel it first.")
+            is_worker_active = self._current_job is not None and self._current_job.status in {"running", "cancelling"}
             job = ControlJob(
                 job_id=f"{spec.kind}-{_slug_now()}",
                 kind=spec.kind,
-                status="running",
+                status="queued" if is_worker_active else "running",
                 command=spec.command,
                 started_at=_utc_now(),
                 output_root=spec.output_root,
                 artifacts=spec.artifacts,
                 dashboard_replay_path=spec.dashboard_replay_path,
             )
-            self._current_job = job
             self._recent_jobs.insert(0, job)
             self._recent_jobs[:] = self._recent_jobs[:8]
-
-        worker = threading.Thread(target=self._run_job, args=(job, spec), daemon=True)
-        worker.start()
+            if is_worker_active:
+                job.append_log("[web-control] Queued behind the currently running job.")
+                self._queued_jobs.append((job, spec))
+                self._persist_history_locked()
+                return job.snapshot()
+            self._start_job_locked(job, spec)
+            self._persist_history_locked()
         return job.snapshot()
 
     def cancel(self, job_id: str) -> dict[str, object]:
         with self._lock:
             job = self._current_job
             process = self._processes.get(job_id)
-            if job is None or job.job_id != job_id or process is None or job.status != "running":
-                raise RuntimeError("No running job found for this id.")
-            job.status = "cancelling"
-            job.append_log("[web-control] Received cancel request.")
-        process.terminate()
-        return job.snapshot()
+            if job is not None and job.job_id == job_id and process is not None and job.status == "running":
+                job.status = "cancelling"
+                job.append_log("[web-control] Received cancel request.")
+                self._persist_history_locked()
+                process.terminate()
+                return job.snapshot()
+
+            for index, (queued_job, _) in enumerate(self._queued_jobs):
+                if queued_job.job_id != job_id:
+                    continue
+                queued_job.status = "cancelled"
+                queued_job.finished_at = _utc_now()
+                queued_job.append_log("[web-control] Removed from queue before execution.")
+                self._queued_jobs.pop(index)
+                self._persist_history_locked()
+                return queued_job.snapshot()
+
+            raise RuntimeError("No running or queued job found for this id.")
 
     def _run_job(self, job: ControlJob, spec: JobSpec) -> None:
         process = subprocess.Popen(
@@ -395,6 +516,68 @@ class ControlRuntime:
                 replay_path = REPO_ROOT / spec.dashboard_replay_path
                 if replay_path.exists():
                     job.append_log(f"[web-control] Dashboard replay refreshed: {spec.dashboard_replay_path}")
+            self._current_job = None
+            self._start_next_job_locked()
+            self._persist_history_locked()
+
+    def _start_job_locked(self, job: ControlJob, spec: JobSpec) -> None:
+        job.status = "running"
+        self._current_job = job
+        worker = threading.Thread(target=self._run_job, args=(job, spec), daemon=True)
+        worker.start()
+
+    def _start_next_job_locked(self) -> None:
+        if self._current_job is not None or not self._queued_jobs:
+            return
+        next_job, next_spec = self._queued_jobs.pop(0)
+        next_job.append_log("[web-control] Leaving queue and starting now.")
+        self._start_job_locked(next_job, next_spec)
+
+    def _persist_history_locked(self) -> None:
+        payload = {
+            "recentJobs": [job.snapshot() for job in self._recent_jobs[:8]],
+        }
+        self._history_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _load_history(self) -> None:
+        if not self._history_path.exists():
+            return
+        try:
+            raw = json.loads(self._history_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return
+        raw_jobs = raw.get("recentJobs", []) if isinstance(raw, dict) else []
+        if not isinstance(raw_jobs, list):
+            return
+        restored_jobs: list[ControlJob] = []
+        for item in raw_jobs:
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status", "failed"))
+            log_tail = str(item.get("logTail", ""))
+            finished_at = str(item.get("finishedAt")) if item.get("finishedAt") is not None else None
+            if status in {"running", "cancelling", "queued"}:
+                status = "cancelled"
+                log_tail = f"{log_tail}\n[web-control] Recovered after restart and marked as cancelled.".strip()
+                finished_at = finished_at or _utc_now()
+            restored_jobs.append(
+                ControlJob(
+                    job_id=str(item.get("jobId", "")),
+                    kind=str(item.get("kind", "unknown")),
+                    status=status,
+                    command=[str(part) for part in item.get("command", []) if isinstance(part, str)],
+                    started_at=str(item.get("startedAt", "")),
+                    finished_at=finished_at,
+                    output_root=str(item.get("outputRoot")) if item.get("outputRoot") is not None else None,
+                    artifacts={str(key): str(value) for key, value in item.get("artifacts", {}).items()} if isinstance(item.get("artifacts"), dict) else {},
+                    dashboard_replay_path=str(item.get("dashboardReplayPath")) if item.get("dashboardReplayPath") is not None else None,
+                    exit_code=int(item.get("exitCode")) if isinstance(item.get("exitCode"), int) else None,
+                    error=str(item.get("error")) if item.get("error") is not None else None,
+                    pid=int(item.get("pid")) if isinstance(item.get("pid"), int) else None,
+                    log_lines=log_tail.splitlines()[-MAX_LOG_LINES:],
+                )
+            )
+        self._recent_jobs = restored_jobs[:8]
 
 
 RUNTIME = ControlRuntime()
@@ -448,6 +631,24 @@ class ControlRequestHandler(BaseHTTPRequestHandler):
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found."})
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/api/control/upload":
+            payload = self._read_json_body()
+            if payload is None:
+                return
+            target = str(payload.get("target", "")).strip()
+            filename = payload.get("filename")
+            content = payload.get("content")
+            if not isinstance(content, str):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Upload content must be a string."})
+                return
+            try:
+                uploaded_path = store_uploaded_file(target, filename if isinstance(filename, str) else None, content)
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            self._send_json(HTTPStatus.CREATED, {"path": uploaded_path})
+            return
+
         if self.path == "/api/control/run":
             payload = self._read_json_body()
             if payload is None:

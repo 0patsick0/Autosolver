@@ -16,13 +16,13 @@ def generate_candidate_options(instance: CanonicalInstance, config: SolveConfig)
         matches = sorted(
             order_match_map.get(order.id, []),
             key=lambda item: (-item.accept_prob, item.cost_score, item.rider_id),
-        )[: max_riders + 1]
+        )[:max_riders]
         if not matches:
             continue
 
         subset_limit = max_riders if instance.constraints.allow_multi_assign else 1
         for subset_size in range(1, subset_limit + 1):
-            for subset in itertools.combinations(matches[: max_riders], subset_size):
+            for subset in itertools.combinations(matches, subset_size):
                 rider_ids = tuple(match.rider_id for match in subset)
                 acceptance_prob = aggregate_acceptance_probability([match.accept_prob for match in subset])
                 total_cost = sum(match.cost_score for match in subset)
@@ -44,9 +44,11 @@ def generate_candidate_options(instance: CanonicalInstance, config: SolveConfig)
                     )
                 )
 
-    bundle_candidates = list(instance.bundle_candidates)
-    if instance.constraints.allow_bundles and config.generate_bundles_if_missing and not bundle_candidates:
-        bundle_candidates.extend(generate_bundle_candidates(instance, config))
+    bundle_candidates: list[BundleCandidate] = []
+    if instance.constraints.allow_bundles:
+        bundle_candidates = list(instance.bundle_candidates)
+        if config.generate_bundles_if_missing and not bundle_candidates:
+            bundle_candidates.extend(generate_bundle_candidates(instance, config))
 
     for bundle in bundle_candidates[: config.max_generated_bundles]:
         if not bundle.order_ids:
@@ -65,7 +67,8 @@ def generate_candidate_options(instance: CanonicalInstance, config: SolveConfig)
             )
         )
 
-    return deduplicate_options(options)
+    deduped = deduplicate_options(options)
+    return _prune_search_noise(deduped)
 
 
 def deduplicate_options(options: list[CandidateOption]) -> list[CandidateOption]:
@@ -82,6 +85,56 @@ def deduplicate_options(options: list[CandidateOption]) -> list[CandidateOption]
         ):
             deduped[key] = option
     return list(deduped.values())
+
+
+def _prune_search_noise(options: list[CandidateOption]) -> list[CandidateOption]:
+    grouped: dict[tuple[str, ...], list[CandidateOption]] = {}
+    for option in options:
+        grouped.setdefault(tuple(sorted(option.order_ids)), []).append(option)
+
+    retained: list[CandidateOption] = []
+    for order_ids, group in grouped.items():
+        pareto_front: list[CandidateOption] = []
+        for candidate in sorted(
+            group,
+            key=lambda option: (
+                -option.expected_completed_orders,
+                option.total_cost / max(1, len(option.order_ids)),
+                len(option.rider_ids),
+                option.id,
+            ),
+        ):
+            if any(_dominates_option(other, candidate) for other in pareto_front):
+                continue
+            pareto_front = [other for other in pareto_front if not _dominates_option(candidate, other)]
+            pareto_front.append(candidate)
+
+        # Keep candidate pool compact to avoid CP-SAT/LNS noise on large instances.
+        limit = 12 if len(order_ids) == 1 else 8
+        retained.extend(
+            sorted(
+                pareto_front,
+                key=lambda option: (
+                    -option.expected_completed_orders,
+                    option.total_cost / max(1, len(option.order_ids)),
+                    len(option.rider_ids),
+                    option.id,
+                ),
+            )[:limit]
+        )
+
+    return retained
+
+
+def _dominates_option(left: CandidateOption, right: CandidateOption) -> bool:
+    if tuple(sorted(left.order_ids)) != tuple(sorted(right.order_ids)):
+        return False
+    return (
+        left.expected_completed_orders >= right.expected_completed_orders
+        and left.total_cost <= right.total_cost
+        and len(left.rider_ids) <= len(right.rider_ids)
+        and (left.expected_completed_orders > right.expected_completed_orders or left.total_cost < right.total_cost)
+    )
 
 
 def generate_bundle_candidates(instance: CanonicalInstance, config: SolveConfig) -> list[BundleCandidate]:
