@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autosolver-agent"
+version = "0.1.0"
+description = "AutoSolver agent system for autonomous delivery assignment research and solving."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27,<0.29",
+  "ortools>=9.10,<10",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+]
+
+[project.scripts]
+autosolver = "autosolver.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-dir]
+autosolver = "solver/autosolver"
+autosolver_agent = "agent/autosolver_agent"
+
+[tool.setuptools.packages.find]
+where = ["solver", "agent"]
+include = ["autosolver*", "autosolver_agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["solver/tests"]
+pythonpath = ["solver", "agent"]
+markers = [
+  "slow: marks tests as slow",
+  "integration: marks integration tests",
+]

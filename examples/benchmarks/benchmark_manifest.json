@@ -1,0 +1,20 @@
+{
+  "benchmark_id": "demo-benchmark-manifest",
+  "cases": [
+    {
+      "case_id": "nearby-cluster",
+      "instance": "benchmark_case_1.json",
+      "repeat": 1,
+      "weight": 1.0
+    },
+    {
+      "case_id": "split-cluster",
+      "instance": "benchmark_case_2.json",
+      "repeat": 2,
+      "weight": 1.3
+    }
+  ],
+  "metadata": {
+    "purpose": "weighted local demo benchmark"
+  }
+}

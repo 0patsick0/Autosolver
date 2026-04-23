@@ -1,0 +1,56 @@
+{
+  "instance_id": "sample-city-a",
+  "solver_name": "portfolio[cpsat]",
+  "status": "ok",
+  "objective": {
+    "expected_completed_orders": 2.6277,
+    "total_cost": 21.3
+  },
+  "selected_option_ids": [
+    "order::o1::r1-r2",
+    "order::o2::r1-r2",
+    "order::o3::r3"
+  ],
+  "dispatches": [
+    {
+      "order_id": "o1",
+      "rider_ids": [
+        "r1",
+        "r2"
+      ],
+      "accepted_probability": 0.8608,
+      "total_cost_share": 9.0,
+      "option_id": "order::o1::r1-r2",
+      "bundle_id": null
+    },
+    {
+      "order_id": "o2",
+      "rider_ids": [
+        "r1",
+        "r2"
+      ],
+      "accepted_probability": 0.8569,
+      "total_cost_share": 9.3,
+      "option_id": "order::o2::r1-r2",
+      "bundle_id": null
+    },
+    {
+      "order_id": "o3",
+      "rider_ids": [
+        "r3"
+      ],
+      "accepted_probability": 0.91,
+      "total_cost_share": 3.0,
+      "option_id": "order::o3::r3",
+      "bundle_id": null
+    }
+  ],
+  "unmatched_order_ids": [],
+  "elapsed_ms": 26,
+  "stats": {
+    "strategy": "set_packing_cpsat",
+    "options_considered": 24,
+    "candidate_option_count": 24,
+    "portfolio_seed": 21
+  }
+}

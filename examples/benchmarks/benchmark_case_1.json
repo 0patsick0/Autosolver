@@ -1,0 +1,31 @@
+{
+  "instance_id": "benchmark-case-1",
+  "orders": [
+    {
+      "id": "a1",
+      "pickup": { "lat": 0.0, "lng": 0.0 },
+      "dropoff": { "lat": 1.0, "lng": 1.0 }
+    },
+    {
+      "id": "a2",
+      "pickup": { "lat": 0.1, "lng": 0.2 },
+      "dropoff": { "lat": 0.9, "lng": 1.2 }
+    }
+  ],
+  "riders": [
+    { "id": "ra", "capacity": 2 },
+    { "id": "rb", "capacity": 1 }
+  ],
+  "match_scores": [
+    { "order_id": "a1", "rider_id": "ra", "accept_prob": 0.80, "cost_score": 5.0 },
+    { "order_id": "a1", "rider_id": "rb", "accept_prob": 0.50, "cost_score": 4.2 },
+    { "order_id": "a2", "rider_id": "ra", "accept_prob": 0.72, "cost_score": 5.4 },
+    { "order_id": "a2", "rider_id": "rb", "accept_prob": 0.46, "cost_score": 4.0 }
+  ],
+  "constraints": {
+    "allow_reject": true,
+    "allow_multi_assign": true,
+    "allow_bundles": true,
+    "max_riders_per_order": 2
+  }
+}

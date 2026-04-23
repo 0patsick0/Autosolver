@@ -1,0 +1,13 @@
+{
+  "top_k_riders_per_order": [1, 2, 3],
+  "use_cpsat": [true, false],
+  "generate_bundles_if_missing": [true, false],
+  "bundle_candidate_pool_size": [4, 6, 8],
+  "max_bundle_size": [2, 3],
+  "bundle_distance_threshold": [1.8, 2.2, 2.8],
+  "bundle_discount_factor": [0.88, 0.92, 0.96],
+  "bundle_acceptance_scale": [0.88, 0.93, 0.97],
+  "max_generated_bundles": [16, 24, 48],
+  "lns_destroy_fraction": [0.15, 0.2, 0.25],
+  "lns_iterations": [8, 12, 20]
+}

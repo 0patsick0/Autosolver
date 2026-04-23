@@ -1,0 +1,48 @@
+{
+  "instance_id": "sample-city-a",
+  "orders": [
+    {
+      "id": "o1",
+      "pickup": { "lat": 0.0, "lng": 0.0 },
+      "dropoff": { "lat": 1.0, "lng": 1.0 },
+      "attributes": { "zone": "A" }
+    },
+    {
+      "id": "o2",
+      "pickup": { "lat": 0.2, "lng": 0.1 },
+      "dropoff": { "lat": 1.2, "lng": 1.1 },
+      "attributes": { "zone": "A" }
+    },
+    {
+      "id": "o3",
+      "pickup": { "lat": 4.0, "lng": 4.0 },
+      "dropoff": { "lat": 5.0, "lng": 5.0 },
+      "attributes": { "zone": "B" }
+    }
+  ],
+  "riders": [
+    { "id": "r1", "capacity": 2, "location": { "lat": 0.0, "lng": 0.1 } },
+    { "id": "r2", "capacity": 2, "location": { "lat": 1.5, "lng": 1.0 } },
+    { "id": "r3", "capacity": 1, "location": { "lat": 4.5, "lng": 4.5 } }
+  ],
+  "match_scores": [
+    { "order_id": "o1", "rider_id": "r1", "accept_prob": 0.76, "cost_score": 5.0 },
+    { "order_id": "o1", "rider_id": "r2", "accept_prob": 0.42, "cost_score": 4.0 },
+    { "order_id": "o1", "rider_id": "r3", "accept_prob": 0.10, "cost_score": 9.5 },
+    { "order_id": "o2", "rider_id": "r1", "accept_prob": 0.73, "cost_score": 5.2 },
+    { "order_id": "o2", "rider_id": "r2", "accept_prob": 0.47, "cost_score": 4.1 },
+    { "order_id": "o2", "rider_id": "r3", "accept_prob": 0.08, "cost_score": 9.0 },
+    { "order_id": "o3", "rider_id": "r1", "accept_prob": 0.15, "cost_score": 8.8 },
+    { "order_id": "o3", "rider_id": "r2", "accept_prob": 0.28, "cost_score": 7.0 },
+    { "order_id": "o3", "rider_id": "r3", "accept_prob": 0.91, "cost_score": 3.0 }
+  ],
+  "constraints": {
+    "allow_reject": true,
+    "allow_multi_assign": true,
+    "allow_bundles": true,
+    "max_riders_per_order": 3
+  },
+  "metadata": {
+    "note": "Synthetic demo instance for solve mode."
+  }
+}

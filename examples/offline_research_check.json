@@ -1,0 +1,105 @@
+{
+  "benchmark_id": "demo-benchmark-manifest",
+  "benchmark_metadata": {
+    "purpose": "weighted local demo benchmark"
+  },
+  "search_space": {
+    "top_k_riders_per_order": [
+      1,
+      2,
+      3
+    ],
+    "use_cpsat": [
+      true,
+      false
+    ],
+    "generate_bundles_if_missing": [
+      true,
+      false
+    ],
+    "bundle_distance_threshold": [
+      2.0,
+      2.5,
+      3.0
+    ],
+    "max_generated_bundles": [
+      16,
+      32,
+      64
+    ],
+    "lns_destroy_fraction": [
+      0.15,
+      0.2,
+      0.25,
+      0.3
+    ],
+    "lns_iterations": [
+      8,
+      12,
+      16,
+      24
+    ]
+  },
+  "state_path": "examples\\offline_research_check.state.json",
+  "agent": {
+    "llm_enabled": false,
+    "provider": "gpt-4.1-mini@api.openai.com",
+    "allow_rule_based_fallback": true,
+    "lesson_count": 0
+  },
+  "incumbent": {
+    "experiment_id": "exp-1",
+    "status": "keep",
+    "hypothesis": "Adjust top_k, bundle generation, and local search neighborhood for benchmark demo-benchmark-manifest with config {\"allow_llm_baseline\": false, \"bundle_acceptance_scale\": 0.95, \"bundle_discount_factor\": 0.92, \"bundle_distance_threshold\": 2.0, \"cpsat_max_orders\": 120, \"generate_bundles_if_missing\": true, \"lns_destroy_fraction\": 0.15, \"lns_iterations\": 8, \"max_generated_bundles\": 16, \"time_budget_ms\": 200, \"top_k_riders_per_order\": 1, \"use_cpsat\": true, \"use_lns\": true}.",
+    "started_at": "2026-04-23T03:19:23.158595+00:00",
+    "finished_at": "2026-04-23T03:19:23.207218+00:00",
+    "average_expected_completed_orders": 2.242222222222223,
+    "average_total_cost": 12.133333333333335,
+    "total_elapsed_ms": 44,
+    "solver_config": {
+      "time_budget_ms": 200,
+      "top_k_riders_per_order": 1,
+      "use_cpsat": true,
+      "use_lns": true,
+      "cpsat_max_orders": 120,
+      "generate_bundles_if_missing": true,
+      "max_generated_bundles": 16,
+      "bundle_distance_threshold": 2.0,
+      "bundle_discount_factor": 0.92,
+      "bundle_acceptance_scale": 0.95,
+      "lns_destroy_fraction": 0.15,
+      "lns_iterations": 8,
+      "allow_llm_baseline": false
+    },
+    "config_signature": "{\"allow_llm_baseline\": false, \"bundle_acceptance_scale\": 0.95, \"bundle_discount_factor\": 0.92, \"bundle_distance_threshold\": 2.0, \"cpsat_max_orders\": 120, \"generate_bundles_if_missing\": true, \"lns_destroy_fraction\": 0.15, \"lns_iterations\": 8, \"max_generated_bundles\": 16, \"time_budget_ms\": 200, \"top_k_riders_per_order\": 1, \"use_cpsat\": true, \"use_lns\": true}"
+  },
+  "history": [
+    {
+      "experiment_id": "exp-1",
+      "status": "keep",
+      "hypothesis": "Adjust top_k, bundle generation, and local search neighborhood for benchmark demo-benchmark-manifest with config {\"allow_llm_baseline\": false, \"bundle_acceptance_scale\": 0.95, \"bundle_discount_factor\": 0.92, \"bundle_distance_threshold\": 2.0, \"cpsat_max_orders\": 120, \"generate_bundles_if_missing\": true, \"lns_destroy_fraction\": 0.15, \"lns_iterations\": 8, \"max_generated_bundles\": 16, \"time_budget_ms\": 200, \"top_k_riders_per_order\": 1, \"use_cpsat\": true, \"use_lns\": true}.",
+      "started_at": "2026-04-23T03:19:23.158595+00:00",
+      "finished_at": "2026-04-23T03:19:23.207218+00:00",
+      "average_expected_completed_orders": 2.242222222222223,
+      "average_total_cost": 12.133333333333335,
+      "total_elapsed_ms": 44,
+      "solver_config": {
+        "time_budget_ms": 200,
+        "top_k_riders_per_order": 1,
+        "use_cpsat": true,
+        "use_lns": true,
+        "cpsat_max_orders": 120,
+        "generate_bundles_if_missing": true,
+        "max_generated_bundles": 16,
+        "bundle_distance_threshold": 2.0,
+        "bundle_discount_factor": 0.92,
+        "bundle_acceptance_scale": 0.95,
+        "lns_destroy_fraction": 0.15,
+        "lns_iterations": 8,
+        "allow_llm_baseline": false
+      },
+      "config_signature": "{\"allow_llm_baseline\": false, \"bundle_acceptance_scale\": 0.95, \"bundle_discount_factor\": 0.92, \"bundle_distance_threshold\": 2.0, \"cpsat_max_orders\": 120, \"generate_bundles_if_missing\": true, \"lns_destroy_fraction\": 0.15, \"lns_iterations\": 8, \"max_generated_bundles\": 16, \"time_budget_ms\": 200, \"top_k_riders_per_order\": 1, \"use_cpsat\": true, \"use_lns\": true}"
+    }
+  ],
+  "lessons": []
+}
