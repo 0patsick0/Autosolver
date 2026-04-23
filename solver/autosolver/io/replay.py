@@ -197,7 +197,7 @@ def build_replay_payload(events: list[Event]) -> dict[str, object]:
             insight["averageTotalCost"] = payload.get("average_total_cost")
             insight["totalElapsedMs"] = payload.get("total_elapsed_ms")
 
-        if event.type == "research.llm_reflection":
+        if event.type in {"research.llm_reflection", "research.heuristic_reflection"}:
             experiment_id = str(payload.get("experiment_id", current_experiment_id or "unknown-exp"))
             insight = round_insights_by_experiment.setdefault(
                 experiment_id,

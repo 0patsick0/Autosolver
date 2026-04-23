@@ -3,7 +3,6 @@ import {
   EVENT_TYPES,
   isReplayData,
   type CaseLeaderboardEntry,
-  type ChartPoint,
   type ReplayAgentSummary,
   type ReplayData,
   type ReplayEvent,
@@ -16,8 +15,47 @@ const DEMO_REPLAY_SOURCE_LABEL = "云端内置 demo-replay.json";
 const LIVE_REPLAY_FILE = "replay-data.json";
 const DEMO_REPLAY_FILE = "demo-replay.json";
 
+const PROCESS_STEPS = [
+  {
+    step: "01",
+    title: "读取配送场景",
+    description: "先把订单、骑手、接单概率、成本分数和业务约束统一整理成一个可求解的问题。",
+  },
+  {
+    step: "02",
+    title: "Agent 提出策略",
+    description: "LLM 会结合历史经验形成下一轮假设，而不是机械地重复同一套算法。",
+  },
+  {
+    step: "03",
+    title: "工具执行求解",
+    description: "本地 solver 会真的跑组合求解，把每个样例的结果和候选池信息算出来。",
+  },
+  {
+    step: "04",
+    title: "自动评估与复盘",
+    description: "系统会自动 keep 或 discard，并把经验写回记忆，推动下一轮继续变聪明。",
+  },
+] as const;
+
+type StoryTone = "system" | "agent" | "tool" | "judge";
+
+interface StoryBeat {
+  id: string;
+  ts: string;
+  type: string;
+  tone: StoryTone;
+  label: string;
+  title: string;
+  body: string;
+  meta: string[];
+  experimentId: string | null;
+  roundIndex: number | null;
+  payload: Record<string, unknown>;
+}
+
 interface MetricCardProps {
-  eyebrow: string;
+  label: string;
   value: string;
   detail: string;
   tone?: "default" | "accent" | "quiet";
@@ -33,25 +71,45 @@ interface ControlBarProps {
   onUseBundledReplay: () => void;
 }
 
-interface EventListProps {
-  events: ReplayEvent[];
-  emptyLabel: string;
+interface PlaybackControlsProps {
+  totalBeats: number;
+  visibleBeats: number;
+  isPlaying: boolean;
+  speedMs: number;
+  onStartPlayback: () => void;
+  onTogglePlayback: () => void;
+  onResetPlayback: () => void;
+  onShowAll: () => void;
+  onSpeedChange: (event: ChangeEvent<HTMLSelectElement>) => void;
+}
+
+interface SessionViewerProps {
+  beats: StoryBeat[];
+  currentBeat: StoryBeat | null;
+  rounds: RoundInsight[];
+  totalBeats: number;
+  visibleBeats: number;
+  isPlaybackMode: boolean;
+  onOpenDetails: (beat: StoryBeat) => void;
+}
+
+interface SessionBubbleProps {
+  beat: StoryBeat;
+  isActive: boolean;
+  onOpenDetails: (beat: StoryBeat) => void;
+}
+
+interface DetailModalProps {
+  beat: StoryBeat | null;
+  onClose: () => void;
 }
 
 interface RoundCardProps {
   round: RoundInsight;
 }
 
-interface PlaybackPanelProps {
-  totalRounds: number;
-  visibleRounds: number;
-  isPlaying: boolean;
-  speedMs: number;
-  onStartPlayback: () => void;
-  onTogglePlayback: () => void;
-  onResetPlayback: () => void;
-  onShowAllRounds: () => void;
-  onSpeedChange: (event: ChangeEvent<HTMLSelectElement>) => void;
+interface CaseCardProps {
+  row: CaseLeaderboardEntry;
 }
 
 const countFormatter = new Intl.NumberFormat("zh-CN", {
@@ -75,38 +133,32 @@ function formatInteger(value: number | null | undefined): string {
   return typeof value === "number" ? integerFormatter.format(value) : "暂无";
 }
 
-function formatProposalType(value: string): string {
-  if (value === "llm") {
-    return "LLM 提案";
-  }
-  if (value === "fallback") {
-    return "回退提案";
-  }
-  return "未知提案";
-}
-
-function formatStatus(value: string): string {
-  if (value === "keep") {
-    return "保留";
-  }
-  if (value === "discard") {
-    return "淘汰";
-  }
-  if (value === "crash") {
-    return "失败";
-  }
-  if (value === "pending") {
-    return "进行中";
-  }
-  return value ? value.replace("_", " ") : "未知";
-}
-
 function formatTimestamp(value: string | null | undefined): string {
   if (!value) {
     return "暂无";
   }
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : timeFormatter.format(parsed);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item)) : [];
 }
 
 function summarizeConfig(config: Record<string, unknown> | null): string[] {
@@ -117,10 +169,44 @@ function summarizeConfig(config: Record<string, unknown> | null): string[] {
   return [
     `Top-K ${String(config.top_k_riders_per_order ?? "暂无")}`,
     `CP-SAT ${config.use_cpsat === false ? "关闭" : "开启"}`,
-    `合单 ${config.generate_bundles_if_missing === false ? "关闭" : "开启"}`,
+    `补合单 ${config.generate_bundles_if_missing === false ? "关闭" : "开启"}`,
+    `合单池 ${String(config.bundle_candidate_pool_size ?? "暂无")}`,
     `LNS ${String(config.lns_iterations ?? "暂无")} 次`,
-    `半径 ${String(config.bundle_distance_threshold ?? "暂无")}`,
   ];
+}
+
+function extractExperimentId(event: ReplayEvent): string | null {
+  return asString(event.payload.experiment_id);
+}
+
+function extractRoundIndex(event: ReplayEvent): number | null {
+  return asNumber(event.payload.round_index);
+}
+
+function formatStatus(status: string | null | undefined): string {
+  if (status === "keep") {
+    return "保留";
+  }
+  if (status === "discard") {
+    return "淘汰";
+  }
+  if (status === "crash") {
+    return "失败";
+  }
+  if (status === "pending") {
+    return "进行中";
+  }
+  return status ?? "未知";
+}
+
+function formatProposalType(value: string): string {
+  if (value === "llm") {
+    return "LLM 提案";
+  }
+  if (value === "fallback") {
+    return "回退提案";
+  }
+  return "未知提案";
 }
 
 function isBundledReplaySource(sourceLabel: string): boolean {
@@ -131,48 +217,223 @@ async function loadReplayPayload(filename: string): Promise<ReplayData> {
   const replayUrl = `${import.meta.env.BASE_URL}${filename}?ts=${Date.now()}`;
   const response = await fetch(replayUrl, { cache: "no-store" });
   if (!response.ok) {
-    throw new Error(`加载 ${filename} 失败: ${response.status} ${response.statusText}`);
+    throw new Error(`加载 ${filename} 失败：${response.status} ${response.statusText}`);
   }
   const payload: unknown = await response.json();
   if (!isReplayData(payload)) {
-    throw new Error(`${filename} 的格式不符合 replay 结构。`);
+    throw new Error(`${filename} 不是合法的 replay JSON。`);
   }
   return payload;
 }
 
-function extractExperimentId(event: ReplayEvent): string | null {
-  const experimentId = event.payload.experiment_id;
-  return typeof experimentId === "string" ? experimentId : null;
-}
-
-function collectScopedEvents(events: ReplayEvent[], experimentIds: Set<string>): ReplayEvent[] {
-  if (experimentIds.size === 0) {
-    return events;
-  }
-
-  const scoped: ReplayEvent[] = [];
-  let activeExperimentId: string | null = null;
+function buildStoryBeats(events: ReplayEvent[]): StoryBeat[] {
+  const beats: StoryBeat[] = [];
 
   for (const event of events) {
-    const explicitExperimentId = extractExperimentId(event);
+    const payload = isRecord(event.payload) ? event.payload : {};
+    const experimentId = extractExperimentId(event);
+    const roundIndex = extractRoundIndex(event);
+
+    if (event.type === EVENT_TYPES.RESEARCH_SESSION_STARTED) {
+      const benchmarkId = asString(event.payload.benchmark_id) ?? "当前基准集";
+      const provider = asString(event.payload.provider) ?? "未知模型";
+      const llmEnabled = asBoolean(event.payload.llm_enabled);
+      beats.push({
+        id: `${event.ts}-${event.type}`,
+        ts: event.ts,
+        type: event.type,
+        tone: "system",
+        label: "系统",
+        title: "Agent 接到新的配送优化任务",
+        body: `系统已载入 ${benchmarkId}，现在开始自主探索更好的分配策略。接下来你会看到它如何提案、调用工具、评估结果，再自己修改方向。`,
+        meta: [provider, llmEnabled ? "LLM 已启用" : "当前为离线回退模式"],
+        experimentId,
+        roundIndex,
+        payload,
+      });
+      continue;
+    }
+
+    if (event.type === EVENT_TYPES.RESEARCH_SESSION_RESUMED) {
+      beats.push({
+        id: `${event.ts}-${event.type}`,
+        ts: event.ts,
+        type: event.type,
+        tone: "system",
+        label: "系统",
+        title: "继续上一次会话",
+        body: "系统不是从零开始，而是带着已有经验和状态继续往前跑。",
+        meta: [asString(event.payload.state_path) ?? "已恢复历史状态"],
+        experimentId,
+        roundIndex,
+        payload,
+      });
+      continue;
+    }
+
+    if (event.type === EVENT_TYPES.RESEARCH_LLM_PROPOSAL || event.type === EVENT_TYPES.RESEARCH_FALLBACK_PROPOSAL) {
+      beats.push({
+        id: `${event.ts}-${event.type}`,
+        ts: event.ts,
+        type: event.type,
+        tone: "agent",
+        label: event.type === EVENT_TYPES.RESEARCH_LLM_PROPOSAL ? "Agent" : "回退策略",
+        title: event.type === EVENT_TYPES.RESEARCH_LLM_PROPOSAL ? "我准备试一组新策略" : "切回保底提案继续搜索",
+        body: asString(event.payload.hypothesis) ?? "这一轮没有留下可展示的假设说明。",
+        meta: summarizeConfig(isRecord(event.payload.solver_config) ? event.payload.solver_config : null),
+        experimentId,
+        roundIndex,
+        payload,
+      });
+      continue;
+    }
+
     if (event.type === EVENT_TYPES.RESEARCH_ROUND_STARTED) {
-      activeExperimentId = explicitExperimentId;
+      beats.push({
+        id: `${event.ts}-${event.type}`,
+        ts: event.ts,
+        type: event.type,
+        tone: "tool",
+        label: "工具",
+        title: "本地求解器开始执行",
+        body: "Agent 已把这组参数交给本地 solver。现在它会真正去跑 benchmark，而不是只停留在口头推理。",
+        meta: summarizeConfig(isRecord(event.payload.solver_config) ? event.payload.solver_config : null),
+        experimentId,
+        roundIndex,
+        payload,
+      });
+      continue;
     }
 
-    const relatedExperimentId = explicitExperimentId ?? activeExperimentId;
-    const isSessionEvent =
-      event.type === EVENT_TYPES.RESEARCH_SESSION_STARTED || event.type === EVENT_TYPES.RESEARCH_SESSION_RESUMED;
-
-    if (isSessionEvent || (relatedExperimentId !== null && experimentIds.has(relatedExperimentId))) {
-      scoped.push(event);
+    if (event.type === EVENT_TYPES.BENCHMARK_CASE_COMPLETED) {
+      const stats = isRecord(payload.stats) ? payload.stats : null;
+      const candidateBreakdown = isRecord(stats?.candidate_option_breakdown) ? stats.candidate_option_breakdown : null;
+      const strategy = asString(stats?.strategy) ?? "portfolio";
+      const candidateCount = asNumber(stats?.candidate_option_count);
+      const bundleCount = asNumber(candidateBreakdown?.bundle);
+      beats.push({
+        id: `${event.ts}-${event.type}-${asString(event.payload.case_id) ?? "case"}`,
+        ts: event.ts,
+        type: event.type,
+        tone: "tool",
+        label: "工具回传",
+        title: `${asString(event.payload.case_id) ?? "样例"} 已完成`,
+        body: `这一个样例的结果已经算出来了：预计完单 ${formatCount(event.payload.expected_completed_orders)}，总成本 ${formatCount(event.payload.total_cost)}，耗时 ${formatInteger(event.payload.elapsed_ms)} ms。`,
+        meta: [
+          `求解策略 ${strategy}`,
+          candidateCount !== null ? `候选池 ${formatInteger(candidateCount)}` : "候选池 暂无",
+          bundleCount !== null ? `合单候选 ${formatInteger(bundleCount)}` : "合单候选 暂无",
+        ],
+        experimentId,
+        roundIndex,
+        payload,
+      });
+      continue;
     }
 
-    if (event.type === EVENT_TYPES.RESEARCH_LLM_REFLECTION || event.type === EVENT_TYPES.RESEARCH_ROUND_FAILED) {
-      activeExperimentId = null;
+    if (event.type === EVENT_TYPES.BENCHMARK_COMPLETED) {
+      beats.push({
+        id: `${event.ts}-${event.type}`,
+        ts: event.ts,
+        type: event.type,
+        tone: "judge",
+        label: "结果汇总",
+        title: "这一轮 benchmark 已跑完",
+        body: `系统把所有样例汇总后发现：这轮的加权平均预计完单是 ${formatCount(event.payload.average_expected_completed_orders)}，平均成本是 ${formatCount(event.payload.average_total_cost)}。`,
+        meta: [`总耗时 ${formatInteger(event.payload.total_elapsed_ms)} ms`, `样例数 ${formatInteger(event.payload.case_count)}`],
+        experimentId,
+        roundIndex,
+        payload,
+      });
+      continue;
+    }
+
+    if (event.type === EVENT_TYPES.RESEARCH_ROUND_COMPLETED) {
+      const status = asString(event.payload.status);
+      beats.push({
+        id: `${event.ts}-${event.type}`,
+        ts: event.ts,
+        type: event.type,
+        tone: "judge",
+        label: "Judge",
+        title: `自动判定：${formatStatus(status)}`,
+        body:
+          status === "keep"
+            ? "这一轮打赢了当前最优解，所以系统会把它保留下来，作为后面继续探索的新锚点。"
+            : status === "discard"
+              ? "这一轮没有打赢当前最优解，所以会被淘汰，但系统仍会记住它失败的原因。"
+              : "这一轮执行异常。系统会记录失败模式，然后换条路继续往前试。",
+        meta: [
+          `预计完单 ${formatCount(event.payload.average_expected_completed_orders)}`,
+          `总成本 ${formatCount(event.payload.average_total_cost)}`,
+          `耗时 ${formatInteger(event.payload.total_elapsed_ms)} ms`,
+        ],
+        experimentId,
+        roundIndex,
+        payload,
+      });
+      continue;
+    }
+
+    if (event.type === EVENT_TYPES.RESEARCH_INCUMBENT_UPDATED) {
+      beats.push({
+        id: `${event.ts}-${event.type}`,
+        ts: event.ts,
+        type: event.type,
+        tone: "system",
+        label: "系统更新",
+        title: "当前最优方案被刷新",
+        body: `现在的 incumbent 已经切换成 ${experimentId ?? "新的实验"}。后面的提案会围绕它继续做更精细的尝试。`,
+        meta: [
+          `预计完单 ${formatCount(event.payload.average_expected_completed_orders)}`,
+          `总成本 ${formatCount(event.payload.average_total_cost)}`,
+        ],
+        experimentId,
+        roundIndex,
+        payload,
+      });
+      continue;
+    }
+
+    if (event.type === EVENT_TYPES.RESEARCH_LLM_REFLECTION || event.type === EVENT_TYPES.RESEARCH_HEURISTIC_REFLECTION) {
+      const nextFocus = asStringArray(event.payload.next_focus);
+      beats.push({
+        id: `${event.ts}-${event.type}`,
+        ts: event.ts,
+        type: event.type,
+        tone: "agent",
+        label: event.type === EVENT_TYPES.RESEARCH_LLM_REFLECTION ? "Agent 复盘" : "启发式复盘",
+        title: "我来复盘这一轮，并决定下一步",
+        body: asString(event.payload.summary) ?? "这一轮没有留下可展示的复盘摘要。",
+        meta: [
+          ...(asString(event.payload.keep_reason) ? [asString(event.payload.keep_reason) ?? ""] : []),
+          ...nextFocus.slice(0, 2),
+        ].filter(Boolean),
+        experimentId,
+        roundIndex,
+        payload,
+      });
+      continue;
+    }
+
+    if (event.type === EVENT_TYPES.RESEARCH_ROUND_FAILED) {
+      beats.push({
+        id: `${event.ts}-${event.type}`,
+        ts: event.ts,
+        type: event.type,
+        tone: "judge",
+        label: "异常处理",
+        title: "这一轮执行失败",
+        body: asString(event.payload.error) ?? "出现了未记录的执行错误。",
+        meta: ["失败不会终止会话，系统会吸收这次经验继续搜索。"],
+        experimentId,
+        roundIndex,
+        payload,
+      });
     }
   }
 
-  return scoped;
+  return beats;
 }
 
 function selectBestRound(rounds: RoundInsight[]): RoundInsight | null {
@@ -204,10 +465,52 @@ function selectBestRound(rounds: RoundInsight[]): RoundInsight | null {
   return bestRound;
 }
 
-function MetricCard({ eyebrow, value, detail, tone = "default" }: MetricCardProps) {
+function buildChartPoints(rounds: RoundInsight[]): { x: number; expected: number; cost: number }[] {
+  return rounds
+    .filter(
+      (round) =>
+        typeof round.averageExpectedCompletedOrders === "number" &&
+        typeof round.averageTotalCost === "number",
+    )
+    .map((round, index) => ({
+      x: index,
+      expected: round.averageExpectedCompletedOrders ?? 0,
+      cost: round.averageTotalCost ?? 0,
+    }));
+}
+
+function useTypedText(text: string, active: boolean) {
+  const [visibleLength, setVisibleLength] = useState(active ? 0 : text.length);
+
+  useEffect(() => {
+    if (!active) {
+      setVisibleLength(text.length);
+      return;
+    }
+
+    setVisibleLength(0);
+    const timerId = window.setInterval(() => {
+      setVisibleLength((current) => {
+        if (current >= text.length) {
+          window.clearInterval(timerId);
+          return text.length;
+        }
+        return current + 2;
+      });
+    }, 18);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [active, text]);
+
+  return active ? text.slice(0, visibleLength) : text;
+}
+
+function MetricCard({ label, value, detail, tone = "default" }: MetricCardProps) {
   return (
     <article className={`metric-card metric-${tone}`}>
-      <p className="metric-eyebrow">{eyebrow}</p>
+      <p className="metric-label">{label}</p>
       <strong className="metric-value">{value}</strong>
       <p className="metric-detail">{detail}</p>
     </article>
@@ -226,182 +529,389 @@ function ControlBar({
   return (
     <section className="control-bar">
       <div className="control-copy">
-        <p className="control-label">数据源</p>
-        <strong translate="no">{sourceLabel}</strong>
-        <p className="control-hint">
-          基准集：<span translate="no">{benchmarkId ?? "暂无"}</span> · 模型：<span translate="no">{provider}</span>
-        </p>
-        <div className="live-status-row">
-          <span className={`live-indicator ${autoRefreshEnabled ? "live-indicator-active" : "live-indicator-paused"}`}>
-            {autoRefreshEnabled ? "正在自动刷新" : "当前是静态回放"}
+        <p className="section-eyebrow">数据来源</p>
+        <strong className="control-source" translate="no">
+          {sourceLabel}
+        </strong>
+        <p className="control-meta">
+          基准集：<span translate="no">{benchmarkId ?? "暂无"}</span>
+          <span className="control-sep" aria-hidden="true">
+            /
           </span>
-          <span className="live-timestamp">最近同步：{formatTimestamp(lastReloadedAt)}</span>
+          模型：<span translate="no">{provider}</span>
+        </p>
+        <div className="live-row">
+          <span className={`live-pill ${autoRefreshEnabled ? "live-active" : "live-static"}`}>
+            {autoRefreshEnabled ? "正在自动刷新" : "当前为静态快照"}
+          </span>
+          <span className="live-time">最近同步：{formatTimestamp(lastReloadedAt)}</span>
         </div>
-        <p className="control-note">本地跑 `research` 时，这个页面会自动读取 `dashboard/public/replay-data.json`。</p>
       </div>
       <div className="control-actions">
-        <button className="secondary-button" type="button" onClick={onUseBundledReplay}>
-          加载托管回放
+        <button className="ghost-button" type="button" onClick={onUseBundledReplay}>
+          重新读取默认回放
         </button>
-        <label className="upload-button">
-          上传本地回放
-          <input className="upload-input" type="file" accept="application/json,.json" aria-label="上传本地回放 JSON" onChange={onLoadLocalReplay} />
+        <label className="primary-button upload-button">
+          上传本地 JSON
+          <input className="upload-input" type="file" accept="application/json,.json" onChange={onLoadLocalReplay} />
         </label>
       </div>
     </section>
   );
 }
 
-function PlaybackPanel({
-  totalRounds,
-  visibleRounds,
+function PlaybackControls({
+  totalBeats,
+  visibleBeats,
   isPlaying,
   speedMs,
   onStartPlayback,
   onTogglePlayback,
   onResetPlayback,
-  onShowAllRounds,
+  onShowAll,
   onSpeedChange,
-}: PlaybackPanelProps) {
-  const playbackProgress = totalRounds === 0 ? 0 : (visibleRounds / totalRounds) * 100;
-  const isPlaybackActive = visibleRounds > 0;
+}: PlaybackControlsProps) {
+  const shownCount = visibleBeats === 0 ? totalBeats : visibleBeats;
+  const progress = totalBeats === 0 ? 0 : (shownCount / totalBeats) * 100;
 
   return (
-    <section className="panel playback-shell">
-      <div className="panel-head">
-        <p className="panel-kicker">网页演示</p>
-        <h2>在浏览器里回放一轮 Agent 决策过程</h2>
+    <section className="playback-panel">
+      <div className="playback-copy">
+        <p className="section-eyebrow">动画演示</p>
+        <h2>像看 Agent 会话直播一样，看见每一次思考和工具调用</h2>
+        <p className="section-text">
+          参考你给的 Kaggle Agent Session 示例，这里把主舞台改成了“会话播放器”。播放时会一条条生成气泡，
+          当前步骤会高亮、逐字出现，工具调用还能点开看结构化细节。
+        </p>
+        <div className="progress-track" aria-hidden="true">
+          <div className="progress-fill" style={{ width: `${progress}%` }} />
+        </div>
+        <div className="progress-meta">
+          <span className="meta-chip">总步骤 {formatInteger(totalBeats)}</span>
+          <span className="meta-chip">已展示 {formatInteger(shownCount)}</span>
+          <span className="meta-chip">{isPlaying ? "正在播放" : visibleBeats > 0 ? "已暂停" : "完整视图"}</span>
+        </div>
       </div>
-      <div className="playback-grid">
-        <div className="playback-copy">
-          <p className="hero-text playback-text">
-            这个页面现在支持“网页内演示回放”：你可以直接点击开始，让轮次、关键事件和曲线按节奏展开。真实求解仍然由本地 CLI 或后端完成，
-            但答辩和展示时，网页已经可以完整播放 Agent 的策略探索过程。
-          </p>
-          <div className="playback-track" aria-hidden="true">
-            <div className="playback-fill" style={{ width: `${playbackProgress}%` }} />
+      <div className="playback-actions">
+        <div className="button-row">
+          <button className="primary-button" type="button" onClick={onStartPlayback} disabled={totalBeats === 0}>
+            开始演示
+          </button>
+          <button className="ghost-button" type="button" onClick={onTogglePlayback} disabled={totalBeats === 0}>
+            {isPlaying ? "暂停" : visibleBeats > 0 ? "继续" : "从头播放"}
+          </button>
+        </div>
+        <div className="button-row">
+          <button className="ghost-button" type="button" onClick={onResetPlayback} disabled={totalBeats === 0}>
+            清空动画
+          </button>
+          <button className="ghost-button" type="button" onClick={onShowAll} disabled={totalBeats === 0}>
+            直接看全量
+          </button>
+        </div>
+        <label className="speed-box">
+          播放节奏
+          <select value={String(speedMs)} onChange={onSpeedChange}>
+            <option value="700">快</option>
+            <option value="1200">中</option>
+            <option value="1800">慢</option>
+          </select>
+        </label>
+      </div>
+    </section>
+  );
+}
+
+function ProcessSteps() {
+  return (
+    <section className="process-panel">
+      <div className="panel-head">
+        <p className="section-eyebrow">先看全局</p>
+        <h2>这个 Agent 是如何一轮轮变聪明的</h2>
+      </div>
+      <div className="process-grid">
+        {PROCESS_STEPS.map((item) => (
+          <article className="process-card" key={item.step}>
+            <span className="process-step">{item.step}</span>
+            <strong>{item.title}</strong>
+            <p>{item.description}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SessionBubble({ beat, isActive, onOpenDetails }: SessionBubbleProps) {
+  const typedBody = useTypedText(beat.body, isActive);
+  const isDetailWorthy = Object.keys(beat.payload).length > 0 && beat.tone !== "agent";
+
+  return (
+    <article
+      className={`session-row session-${beat.tone} ${isActive ? "session-row-active" : ""}`}
+      id={`beat-${beat.id}`}
+    >
+      <div className="session-bubble">
+        <div className="session-bubble-head">
+          <div>
+            <p className="session-bubble-label">{beat.label}</p>
+            <strong>{beat.title}</strong>
           </div>
-          <div className="playback-stats">
-            <span className="meta-chip">总轮次 {formatInteger(totalRounds)}</span>
-            <span className="meta-chip">已展示 {formatInteger(isPlaybackActive ? visibleRounds : totalRounds)}</span>
-            <span className="meta-chip">{isPlaying ? "正在播放" : isPlaybackActive ? "已暂停" : "完整视图"}</span>
+          <div className="session-bubble-tags">
+            {beat.roundIndex !== null ? <span className="meta-chip">第 {beat.roundIndex + 1} 轮</span> : null}
+            {beat.experimentId ? (
+              <span className="meta-chip" translate="no">
+                {beat.experimentId}
+              </span>
+            ) : null}
           </div>
         </div>
-        <div className="playback-actions">
-          <div className="button-row">
-            <button className="secondary-button" type="button" onClick={onStartPlayback} disabled={totalRounds === 0}>
-              开始演示
-            </button>
-            <button className="secondary-button" type="button" onClick={onTogglePlayback} disabled={totalRounds === 0 || visibleRounds === 0}>
-              {isPlaying ? "暂停演示" : "继续播放"}
-            </button>
+        <p className="session-bubble-body">
+          {typedBody}
+          {isActive ? <span className="typing-cursor" aria-hidden="true" /> : null}
+        </p>
+        {beat.meta.length > 0 ? (
+          <div className="session-bubble-meta">
+            {beat.meta.map((item) => (
+              <span className="config-chip" key={`${beat.id}-${item}`}>
+                {item}
+              </span>
+            ))}
           </div>
-          <div className="button-row">
-            <button className="secondary-button" type="button" onClick={onResetPlayback} disabled={totalRounds === 0}>
-              重置回放
+        ) : null}
+        <div className="session-bubble-footer">
+          <time>{formatTimestamp(beat.ts)}</time>
+          {isDetailWorthy ? (
+            <button className="detail-link" type="button" onClick={() => onOpenDetails(beat)}>
+              查看详情
             </button>
-            <button className="secondary-button" type="button" onClick={onShowAllRounds} disabled={totalRounds === 0}>
-              查看全量
-            </button>
+          ) : null}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function DetailModal({ beat, onClose }: DetailModalProps) {
+  useEffect(() => {
+    if (!beat) {
+      return;
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [beat, onClose]);
+
+  if (!beat) {
+    return null;
+  }
+
+  return (
+    <div className="detail-modal-overlay" role="presentation" onClick={onClose}>
+      <div
+        className="detail-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="查看事件详情"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="detail-modal-head">
+          <div>
+            <p className="section-eyebrow">结构化详情</p>
+            <h3>{beat.title}</h3>
           </div>
-          <label className="speed-label">
-            回放节奏
-            <select className="speed-select" value={String(speedMs)} onChange={onSpeedChange}>
-              <option value="800">快</option>
-              <option value="1400">中</option>
-              <option value="2200">慢</option>
-            </select>
-          </label>
+          <button className="detail-close" type="button" onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <div className="detail-modal-grid">
+          <div className="detail-card">
+            <strong>事件信息</strong>
+            <p>类型：{beat.type}</p>
+            <p>时间：{formatTimestamp(beat.ts)}</p>
+            <p>轮次：{beat.roundIndex !== null ? `第 ${beat.roundIndex + 1} 轮` : "暂无"}</p>
+            <p>实验：{beat.experimentId ?? "暂无"}</p>
+          </div>
+          <div className="detail-card detail-card-code">
+            <strong>原始 payload</strong>
+            <pre>{JSON.stringify(beat.payload, null, 2)}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SessionViewer({
+  beats,
+  currentBeat,
+  rounds,
+  totalBeats,
+  visibleBeats,
+  isPlaybackMode,
+  onOpenDetails,
+}: SessionViewerProps) {
+  useEffect(() => {
+    if (!currentBeat) {
+      return;
+    }
+
+    const element = document.getElementById(`beat-${currentBeat.id}`);
+    if (!element) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      element.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+  }, [currentBeat]);
+
+  const activeRoundIndex = currentBeat?.roundIndex ?? (rounds.length > 0 ? rounds.length - 1 : null);
+  const shownCount = visibleBeats === 0 ? totalBeats : visibleBeats;
+
+  return (
+    <section className="session-viewer" id="story-stage">
+      <aside className="session-sidebar">
+        <div className="session-sidebar-head">
+          <p className="section-eyebrow">会话导航</p>
+          <h2>Agent Session</h2>
+          <p>当前主舞台参考你给的示例，改成了真正的会话播放器。</p>
+        </div>
+        <div className="session-sidebar-block">
+          <strong>播放进度</strong>
+          <p>
+            已展示 {formatInteger(shownCount)} / {formatInteger(totalBeats)} 个动作节点
+          </p>
+        </div>
+        <div className="session-sidebar-block">
+          <strong>轮次切片</strong>
+          <div className="session-round-list">
+            {rounds.length > 0 ? (
+              rounds.map((round, index) => (
+                <article
+                  className={`session-round-item ${activeRoundIndex === index ? "session-round-item-active" : ""}`}
+                  key={round.experimentId}
+                >
+                  <div className="session-round-row">
+                    <span className={`status-pill status-${round.status}`}>{formatStatus(round.status)}</span>
+                    <span className="session-round-index">第 {index + 1} 轮</span>
+                  </div>
+                  <strong translate="no">{round.experimentId}</strong>
+                  <p>{round.hypothesis}</p>
+                </article>
+              ))
+            ) : (
+              <div className="empty-state dark-empty">播放还没走到完整轮次。</div>
+            )}
+          </div>
+        </div>
+      </aside>
+
+      <div className="session-main">
+        <div className="session-topbar">
+          <div>
+            <span className="session-title">AutoSolver 会话回放</span>
+            <p className="session-subtitle">
+              {currentBeat
+                ? `当前镜头：${currentBeat.title}`
+                : "当前是完整视图，你可以直接滚动查看整个 Agent 链路。"}
+            </p>
+          </div>
+          <div className="session-topbar-tags">
+            <span className="meta-chip">{isPlaybackMode ? "动画模式" : "完整模式"}</span>
+            {currentBeat?.experimentId ? (
+              <span className="meta-chip" translate="no">
+                {currentBeat.experimentId}
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="session-chat" aria-live="polite">
+          {beats.length > 0 ? (
+            beats.map((beat) => (
+              <SessionBubble
+                key={beat.id}
+                beat={beat}
+                isActive={Boolean(isPlaybackMode && currentBeat?.id === beat.id)}
+                onOpenDetails={onOpenDetails}
+              />
+            ))
+          ) : (
+            <div className="empty-state dark-empty">当前没有可展示的会话消息。</div>
+          )}
         </div>
       </div>
     </section>
   );
 }
 
-function Chart({ points }: { points: ChartPoint[] }) {
+function ScoreChart({ rounds }: { rounds: RoundInsight[] }) {
+  const points = buildChartPoints(rounds);
   if (points.length === 0) {
-    return <div className="empty-state">当前还没有可以绘图的分数曲线。</div>;
-  }
-
-  const expectedSeries = points.filter((point) => typeof point.expectedCompletedOrders === "number");
-  const costSeries = points.filter((point) => typeof point.totalCost === "number");
-  if (expectedSeries.length === 0) {
-    return <div className="empty-state">当前回放还没有可展示的曲线点。</div>;
+    return <div className="empty-state">需要至少一轮完整结果，才能画出分数变化曲线。</div>;
   }
 
   const width = 760;
   const height = 280;
-  const paddingX = 44;
-  const paddingY = 30;
-  const expectedValues = expectedSeries.map((point) => point.expectedCompletedOrders ?? 0);
-  const costValues = costSeries.map((point) => point.totalCost ?? 0);
+  const paddingX = 46;
+  const paddingY = 34;
+  const expectedValues = points.map((point) => point.expected);
+  const costValues = points.map((point) => point.cost);
   const minExpected = Math.min(...expectedValues);
   const maxExpected = Math.max(...expectedValues);
-  const minCost = Math.min(...costValues, 0);
-  const maxCost = Math.max(...costValues, 1);
-  const gridLines = 4;
+  const minCost = Math.min(...costValues);
+  const maxCost = Math.max(...costValues);
 
-  function buildPath(series: ChartPoint[], minValue: number, maxValue: number, valueKey: "expectedCompletedOrders" | "totalCost") {
-    return series
-      .map((point, index) => {
-        const x = paddingX + (index / Math.max(1, series.length - 1)) * (width - paddingX * 2);
-        const normalized = ((point[valueKey] ?? 0) - minValue) / Math.max(0.001, maxValue - minValue || 1);
-        const y = height - paddingY - normalized * (height - paddingY * 2);
-        return `${index === 0 ? "M" : "L"} ${x} ${y}`;
-      })
-      .join(" ");
+  function positionX(index: number): number {
+    return paddingX + (index / Math.max(1, points.length - 1)) * (width - paddingX * 2);
   }
 
-  const expectedPath = buildPath(expectedSeries, minExpected, maxExpected, "expectedCompletedOrders");
-  const costPath = buildPath(costSeries, minCost, maxCost, "totalCost");
+  function positionY(value: number, minValue: number, maxValue: number): number {
+    const normalized = (value - minValue) / Math.max(0.001, maxValue - minValue || 1);
+    return height - paddingY - normalized * (height - paddingY * 2);
+  }
+
+  const expectedPath = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${positionX(index)} ${positionY(point.expected, minExpected, maxExpected)}`)
+    .join(" ");
+
+  const costPath = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${positionX(index)} ${positionY(point.cost, minCost, maxCost)}`)
+    .join(" ");
 
   return (
     <div className="chart-shell">
       <div className="chart-legend">
-        <span className="legend-chip legend-primary">预计完单数</span>
+        <span className="legend-chip legend-primary">预计完单</span>
         <span className="legend-chip legend-secondary">总成本</span>
       </div>
-      <svg className="chart-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="回放分数曲线">
-        <rect x="0" y="0" width={width} height={height} rx="24" className="chart-backdrop" />
-        {Array.from({ length: gridLines }, (_, index) => {
-          const y = paddingY + (index / Math.max(1, gridLines - 1)) * (height - paddingY * 2);
-          return <line key={index} x1={paddingX} x2={width - paddingX} y1={y} y2={y} className="chart-grid-line" />;
-        })}
-        <path d={expectedPath} className="chart-line chart-line-primary" />
-        <path d={costPath} className="chart-line chart-line-secondary" />
-        {expectedSeries.map((point, index) => {
-          const x = paddingX + (index / Math.max(1, expectedSeries.length - 1)) * (width - paddingX * 2);
-          const normalized = ((point.expectedCompletedOrders ?? 0) - minExpected) / Math.max(0.001, maxExpected - minExpected || 1);
-          const y = height - paddingY - normalized * (height - paddingY * 2);
-          return <circle key={`${point.ts}-${point.type}-expected`} cx={x} cy={y} r="5" className="chart-dot chart-dot-primary" />;
-        })}
+      <svg className="chart-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="实验轮次分数变化曲线">
+        <rect className="chart-backdrop" width={width} height={height} rx="26" />
+        <path className="chart-line chart-line-primary" d={expectedPath} />
+        <path className="chart-line chart-line-secondary" d={costPath} />
+        {points.map((point, index) => (
+          <circle
+            className="chart-dot chart-dot-primary"
+            key={`expected-${index}`}
+            cx={positionX(index)}
+            cy={positionY(point.expected, minExpected, maxExpected)}
+            r="5"
+          />
+        ))}
       </svg>
       <div className="chart-footer">
-        <span>起点：{formatCount(expectedSeries[0]?.expectedCompletedOrders)}</span>
-        <span>最好：{formatCount(Math.max(...expectedValues))}</span>
+        <span>最优预计完单：{formatCount(Math.max(...expectedValues))}</span>
+        <span>最低总成本：{formatCount(Math.min(...costValues))}</span>
       </div>
-    </div>
-  );
-}
-
-function EventList({ events, emptyLabel }: EventListProps) {
-  if (events.length === 0) {
-    return <div className="empty-state">{emptyLabel}</div>;
-  }
-
-  return (
-    <div className="event-list">
-      {events.map((event) => (
-        <article className="event-item" key={`${event.ts}-${event.type}`}>
-          <div className="event-head">
-            <span className="event-type" translate="no">
-              {event.type}
-            </span>
-            <time className="event-time">{formatTimestamp(event.ts)}</time>
-          </div>
-          <pre className="event-payload">{JSON.stringify(event.payload, null, 2)}</pre>
-        </article>
-      ))}
     </div>
   );
 }
@@ -411,93 +921,69 @@ function RoundCard({ round }: RoundCardProps) {
 
   return (
     <article className="round-card">
-      <div className="round-card-head">
-        <div className="round-title">
+      <div className="round-head">
+        <div className="round-tags">
           <span className={`status-pill status-${round.status}`}>{formatStatus(round.status)}</span>
           <span className={`proposal-pill proposal-${round.proposalType}`}>{formatProposalType(round.proposalType)}</span>
         </div>
         <strong translate="no">{round.experimentId}</strong>
       </div>
-      <p className="round-hypothesis">{round.hypothesis}</p>
+      <p className="round-title">{round.hypothesis}</p>
       <div className="round-stats">
-        <span>预计完单：{formatCount(round.averageExpectedCompletedOrders)}</span>
-        <span>总成本：{formatCount(round.averageTotalCost)}</span>
-        <span>耗时：{formatInteger(round.totalElapsedMs)} ms</span>
-        {typeof round.averageCandidateOptionCount === "number" ? <span>候选池：{formatInteger(round.averageCandidateOptionCount)}</span> : null}
-        {typeof round.averageBundleOptionCount === "number" ? <span>合单候选：{formatInteger(round.averageBundleOptionCount)}</span> : null}
+        <span>预计完单 {formatCount(round.averageExpectedCompletedOrders)}</span>
+        <span>总成本 {formatCount(round.averageTotalCost)}</span>
+        <span>耗时 {formatInteger(round.totalElapsedMs)} ms</span>
       </div>
       {configChips.length > 0 ? (
-        <div className="config-chip-row">
+        <div className="story-meta">
           {configChips.map((chip) => (
-            <span className="config-chip" key={chip}>
+            <span className="config-chip" key={`${round.experimentId}-${chip}`}>
               {chip}
             </span>
           ))}
         </div>
       ) : null}
-      {round.reflectionSummary ? <p className="round-reflection">{round.reflectionSummary}</p> : null}
-      {round.keepReason ? <p className="round-keep-reason">{round.keepReason}</p> : null}
-      {round.nextFocus.length > 0 ? (
-        <div className="list-block">
-          <p className="list-label">下一步</p>
-          <ul>
-            {round.nextFocus.slice(0, 3).map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      {round.risks.length > 0 ? (
-        <div className="list-block">
-          <p className="list-label">风险</p>
-          <ul>
-            {round.risks.slice(0, 2).map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      {round.reflectionSummary ? <p className="round-copy">{round.reflectionSummary}</p> : null}
     </article>
   );
 }
 
-function CaseLeaderboard({ rows }: { rows: CaseLeaderboardEntry[] }) {
-  if (rows.length === 0) {
-    return <div className="empty-state">当前回放没有可排序的 benchmark case。</div>;
-  }
-
+function CaseCard({ row }: CaseCardProps) {
   return (
-    <div className="table-shell">
-      <table className="case-table">
-        <caption>按平均预计完单数排序的 benchmark case。</caption>
-        <thead>
-          <tr>
-            <th scope="col">Case</th>
-            <th scope="col">平均预计完单</th>
-            <th scope="col">平均成本</th>
-            <th scope="col">平均耗时</th>
-            <th scope="col">平均候选池</th>
-            <th scope="col">平均合单</th>
-            <th scope="col">运行次数</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.slice(0, 6).map((row, index) => (
-            <tr key={row.caseId ?? row.instanceId ?? `case-${index}`}>
-              <th scope="row" translate="no">
-                {row.caseId ?? row.instanceId ?? "unknown"}
-              </th>
-              <td>{formatCount(row.averageExpectedCompletedOrders)}</td>
-              <td>{formatCount(row.averageTotalCost)}</td>
-              <td>{formatInteger(row.averageElapsedMs)} ms</td>
-              <td>{formatInteger(row.averageCandidateOptionCount)}</td>
-              <td>{formatInteger(row.averageBundleOptionCount)}</td>
-              <td>{formatInteger(row.runs)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <article className="case-card">
+      <div className="case-head">
+        <strong translate="no">{row.caseId ?? row.instanceId ?? "unknown-case"}</strong>
+        <span className="meta-chip">运行 {formatInteger(row.runs)} 次</span>
+      </div>
+      <p className="case-copy">
+        平均预计完单 {formatCount(row.averageExpectedCompletedOrders)}，平均成本 {formatCount(row.averageTotalCost)}，平均耗时{" "}
+        {formatInteger(row.averageElapsedMs)} ms。
+      </p>
+      <div className="story-meta">
+        <span className="config-chip">候选池 {formatInteger(row.averageCandidateOptionCount)}</span>
+        <span className="config-chip">合单候选 {formatInteger(row.averageBundleOptionCount)}</span>
+        {row.lastSolverName ? <span className="config-chip">{row.lastSolverName}</span> : null}
+      </div>
+    </article>
+  );
+}
+
+function DebugDrawer({ events }: { events: ReplayEvent[] }) {
+  return (
+    <details className="debug-drawer">
+      <summary>查看原始事件流</summary>
+      <div className="raw-log-list">
+        {events.map((event) => (
+          <article className="raw-log-item" key={`${event.ts}-${event.type}`}>
+            <div className="raw-log-head">
+              <strong translate="no">{event.type}</strong>
+              <time>{formatTimestamp(event.ts)}</time>
+            </div>
+            <pre>{JSON.stringify(event.payload, null, 2)}</pre>
+          </article>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -506,9 +992,11 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [sourceLabel, setSourceLabel] = useState(LIVE_REPLAY_SOURCE_LABEL);
   const [lastReloadedAt, setLastReloadedAt] = useState<string | null>(null);
-  const [visibleRoundCount, setVisibleRoundCount] = useState(0);
+  const [visibleBeatCount, setVisibleBeatCount] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackSpeedMs, setPlaybackSpeedMs] = useState(1400);
+  const [playbackSpeedMs, setPlaybackSpeedMs] = useState(1200);
+  const [detailBeat, setDetailBeat] = useState<StoryBeat | null>(null);
+  const [hasAutoStarted, setHasAutoStarted] = useState(false);
 
   const loadBundledReplay = useEffectEvent(async () => {
     let payload: ReplayData;
@@ -524,13 +1012,17 @@ function App() {
       }
     }
 
+    const isFirstLoad = data === null;
+
     startTransition(() => {
       setData(payload);
       setError(null);
       setSourceLabel(loadedSourceLabel);
       setLastReloadedAt(new Date().toISOString());
-      setVisibleRoundCount(0);
-      setIsPlaying(false);
+      if (isFirstLoad) {
+        setVisibleBeatCount(0);
+        setIsPlaying(false);
+      }
     });
   });
 
@@ -542,7 +1034,7 @@ function App() {
         await loadBundledReplay();
       } catch (loadError) {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : "加载回放数据时发生未知错误。");
+          setError(loadError instanceof Error ? loadError.message : "加载 replay 数据时发生未知错误。");
         }
       }
     }
@@ -567,19 +1059,51 @@ function App() {
     };
   }, [loadBundledReplay, sourceLabel]);
 
-  const totalRounds = data?.roundInsights?.length ?? 0;
+  const events = data?.events ?? [];
+  const roundInsights = data?.roundInsights ?? [];
+  const caseLeaderboard = data?.caseLeaderboard ?? [];
+  const summary = data?.summary;
+  const agent: ReplayAgentSummary | undefined = data?.agent;
+  const storyBeats = buildStoryBeats(events);
+  const totalBeats = storyBeats.length;
+  const isPlaybackMode = visibleBeatCount > 0;
+  const shownBeats = isPlaybackMode ? storyBeats.slice(0, visibleBeatCount) : storyBeats;
+  const completedRoundCount = shownBeats.filter((beat) => beat.type === EVENT_TYPES.RESEARCH_ROUND_COMPLETED).length;
+  const shownRounds = isPlaybackMode ? roundInsights.slice(0, completedRoundCount) : roundInsights;
+  const currentBeat = shownBeats.at(-1) ?? null;
+  const visibleKeepCount = shownRounds.filter((round) => round.status === "keep").length;
+  const visibleDiscardCount = shownRounds.filter((round) => round.status === "discard").length;
+  const visibleFailureCount = shownRounds.filter((round) => round.status === "crash").length;
+  const bestRound = selectBestRound(shownRounds.length > 0 ? shownRounds : roundInsights);
+  const autoRefreshEnabled = isBundledReplaySource(sourceLabel);
 
   useEffect(() => {
-    if (!isPlaying || totalRounds === 0) {
+    if (hasAutoStarted || totalBeats === 0) {
       return;
     }
 
     const timerId = window.setTimeout(() => {
-      setVisibleRoundCount((current) => {
+      setVisibleBeatCount(1);
+      setIsPlaying(true);
+      setHasAutoStarted(true);
+    }, 700);
+
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [hasAutoStarted, totalBeats]);
+
+  useEffect(() => {
+    if (!isPlaying || totalBeats === 0) {
+      return;
+    }
+
+    const timerId = window.setTimeout(() => {
+      setVisibleBeatCount((current) => {
         const nextValue = current <= 0 ? 1 : current + 1;
-        if (nextValue >= totalRounds) {
+        if (nextValue >= totalBeats) {
           setIsPlaying(false);
-          return totalRounds;
+          return totalBeats;
         }
         return nextValue;
       });
@@ -588,43 +1112,7 @@ function App() {
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [isPlaying, playbackSpeedMs, totalRounds, visibleRoundCount]);
-
-  const events = data?.events ?? [];
-  const summary = data?.summary;
-  const agent: ReplayAgentSummary | undefined = data?.agent;
-  const roundInsights = data?.roundInsights ?? [];
-  const chartPoints = data?.chartPoints ?? [];
-  const caseLeaderboard = data?.caseLeaderboard ?? [];
-
-  const isPlaybackMode = visibleRoundCount > 0 && totalRounds > 0;
-  const shownRounds = isPlaybackMode ? roundInsights.slice(0, visibleRoundCount) : roundInsights;
-  const shownExperimentIds = new Set(shownRounds.map((round) => round.experimentId));
-  const scopedEvents = isPlaybackMode ? collectScopedEvents(events, shownExperimentIds) : events;
-  const shownChartPoints = isPlaybackMode ? chartPoints.slice(0, Math.min(chartPoints.length, Math.max(1, visibleRoundCount * 2))) : chartPoints;
-
-  const visibleKeepCount = shownRounds.filter((round) => round.status === "keep").length;
-  const visibleDiscardCount = shownRounds.filter((round) => round.status === "discard").length;
-  const visibleFailureCount = shownRounds.filter((round) => round.status === "crash").length;
-  const visibleBestRound = selectBestRound(shownRounds);
-  const latestReflection = [...shownRounds].reverse().find((round) => round.reflectionSummary);
-  const latestIncumbentRound = [...shownRounds].reverse().find((round) => round.status === "keep");
-  const autoRefreshEnabled = isBundledReplaySource(sourceLabel);
-
-  const highlightTypes = new Set<string>([
-    EVENT_TYPES.RESEARCH_LLM_PROPOSAL,
-    EVENT_TYPES.RESEARCH_FALLBACK_PROPOSAL,
-    EVENT_TYPES.RESEARCH_LLM_REFLECTION,
-    EVENT_TYPES.RESEARCH_INCUMBENT_UPDATED,
-    EVENT_TYPES.RESEARCH_ROUND_FAILED,
-  ]);
-
-  const highlightEvents = scopedEvents
-    .filter((event) => highlightTypes.has(event.type))
-    .slice(-8)
-    .reverse();
-  const failureEvents = scopedEvents.filter((event) => event.type === EVENT_TYPES.RESEARCH_ROUND_FAILED);
-  const rawEvents = scopedEvents.slice(-12).reverse();
+  }, [isPlaying, playbackSpeedMs, totalBeats, visibleBeatCount]);
 
   async function handleLoadLocalReplay(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -636,41 +1124,45 @@ function App() {
       const text = await file.text();
       const payload: unknown = JSON.parse(text);
       if (!isReplayData(payload)) {
-        throw new Error("选择的文件不是合法的 replay JSON。");
+        throw new Error("你选择的文件不是合法的 replay JSON。");
       }
       startTransition(() => {
         setData(payload);
         setError(null);
         setSourceLabel(file.name);
         setLastReloadedAt(new Date().toISOString());
-        setVisibleRoundCount(0);
+        setVisibleBeatCount(0);
         setIsPlaying(false);
+        setHasAutoStarted(false);
       });
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "加载本地回放文件失败。");
+      setError(loadError instanceof Error ? loadError.message : "加载本地 JSON 失败。");
     } finally {
       event.target.value = "";
     }
   }
 
   function handleUseBundledReplay() {
+    setVisibleBeatCount(0);
+    setIsPlaying(false);
+    setHasAutoStarted(false);
     void loadBundledReplay();
   }
 
   function handleStartPlayback() {
-    if (totalRounds === 0) {
+    if (totalBeats === 0) {
       return;
     }
-    setVisibleRoundCount(1);
+    setVisibleBeatCount(1);
     setIsPlaying(true);
   }
 
   function handleTogglePlayback() {
-    if (totalRounds === 0) {
+    if (totalBeats === 0) {
       return;
     }
-    if (visibleRoundCount === 0) {
-      setVisibleRoundCount(1);
+    if (visibleBeatCount === 0) {
+      setVisibleBeatCount(1);
       setIsPlaying(true);
       return;
     }
@@ -678,12 +1170,12 @@ function App() {
   }
 
   function handleResetPlayback() {
-    setVisibleRoundCount(0);
+    setVisibleBeatCount(0);
     setIsPlaying(false);
   }
 
-  function handleShowAllRounds() {
-    setVisibleRoundCount(0);
+  function handleShowAll() {
+    setVisibleBeatCount(0);
     setIsPlaying(false);
   }
 
@@ -691,34 +1183,42 @@ function App() {
     setPlaybackSpeedMs(Number(event.target.value));
   }
 
+  function handleOpenDetails(beat: StoryBeat) {
+    setDetailBeat(beat);
+  }
+
+  function handleCloseDetails() {
+    setDetailBeat(null);
+  }
+
   return (
     <main className="page-shell" id="main-content">
-      <a className="skip-link" href="#dashboard-panels">
-        跳转到看板主体
+      <a className="skip-link" href="#story-stage">
+        跳到会话主舞台
       </a>
 
       <section className="hero">
         <div className="hero-copy">
-          <p className="hero-kicker">AutoSolver 智能体看板</p>
-          <h1>在一个页面里看清 Agent 的提案、试错、淘汰和保留</h1>
+          <p className="section-eyebrow">AutoSolver Agent 展示页</p>
+          <h1>把 AI Agent 的策略探索过程，做成一场外行也能看懂的会话演示</h1>
           <p className="hero-text">
-            这个 dashboard 现在已经偏向答辩展示风格：上面是核心指标和网页演示入口，中间是轮次决策、关键事件和曲线，下面保留原始事件流，
-            既能讲故事，也能对照数据排查问题。
+            这一版不再像监控面板，而是更接近你给的 Kaggle Agent Session 示例：页面会把提案、工具调用、样例回传、判定和复盘串成一段连续动画，
+            让观众像看直播一样理解 Agent 是怎么一步步找到更优策略的。
           </p>
-          <div className="hero-meta">
+          <div className="hero-chips">
             <span className="meta-chip">基准集 {summary?.benchmarkId ?? agent?.benchmarkId ?? "暂无"}</span>
             <span className="meta-chip">模型 {agent?.provider ?? "暂无"}</span>
-            <span className="meta-chip">{agent?.llmEnabled ? "LLM 已启用" : "仅回退模式"}</span>
-            <span className="meta-chip">{isPlaybackMode ? "网页演示中" : autoRefreshEnabled ? "实时跟踪" : "静态快照"}</span>
+            <span className="meta-chip">{agent?.llmEnabled ? "LLM 驱动" : "离线回退"}</span>
+            <span className="meta-chip">{autoRefreshEnabled ? "本地实时联动" : "静态回放"}</span>
           </div>
         </div>
         <div className="hero-metrics">
-          <MetricCard eyebrow="轮次" value={formatInteger(shownRounds.length)} detail="当前页面正在展示的实验轮次。" tone="accent" />
-          <MetricCard eyebrow="保留" value={formatInteger(visibleKeepCount)} detail="被 judge 接受并成为候选最优的实验。" />
-          <MetricCard eyebrow="淘汰" value={formatInteger(visibleDiscardCount)} detail="自动评估后被判定为退化的实验。" />
-          <MetricCard eyebrow="失败" value={formatInteger(visibleFailureCount)} detail="崩溃、超时或无效运行。" tone="quiet" />
-          <MetricCard eyebrow="最好完单" value={formatCount(visibleBestRound?.averageExpectedCompletedOrders ?? summary?.bestExpectedCompletedOrders)} detail="当前视图中的最优预计完单数。" />
-          <MetricCard eyebrow="最好成本" value={formatCount(visibleBestRound?.averageTotalCost ?? summary?.bestTotalCost)} detail="在当前最优视图下的对应成本。" />
+          <MetricCard label="故事步骤" value={formatInteger(totalBeats)} detail="一场完整会话里，页面会展示的动作节点数。" tone="accent" />
+          <MetricCard label="保留轮次" value={formatInteger(visibleKeepCount)} detail="这些轮次被自动 judge 认可为更优结果。" />
+          <MetricCard label="淘汰轮次" value={formatInteger(visibleDiscardCount)} detail="这些尝试没赢，但会变成下一轮的经验。" />
+          <MetricCard label="失败轮次" value={formatInteger(visibleFailureCount)} detail="异常不会打断会话，而会被系统记住。" tone="quiet" />
+          <MetricCard label="最佳预计完单" value={formatCount(bestRound?.averageExpectedCompletedOrders ?? summary?.bestExpectedCompletedOrders)} detail="当前视图里最好的主目标成绩。" />
+          <MetricCard label="对应总成本" value={formatCount(bestRound?.averageTotalCost ?? summary?.bestTotalCost)} detail="在最优完单结果下，对应的成本表现。" />
         </div>
       </section>
 
@@ -732,15 +1232,17 @@ function App() {
         onUseBundledReplay={handleUseBundledReplay}
       />
 
-      <PlaybackPanel
-        totalRounds={totalRounds}
-        visibleRounds={isPlaybackMode ? visibleRoundCount : totalRounds}
+      <ProcessSteps />
+
+      <PlaybackControls
+        totalBeats={totalBeats}
+        visibleBeats={visibleBeatCount}
         isPlaying={isPlaying}
         speedMs={playbackSpeedMs}
         onStartPlayback={handleStartPlayback}
         onTogglePlayback={handleTogglePlayback}
         onResetPlayback={handleResetPlayback}
-        onShowAllRounds={handleShowAllRounds}
+        onShowAll={handleShowAll}
         onSpeedChange={handleSpeedChange}
       />
 
@@ -750,122 +1252,65 @@ function App() {
         </div>
       ) : null}
 
-      <section className="analytics-strip" aria-label="回放摘要">
-        <MetricCard
-          eyebrow="会话开始"
-          value={formatTimestamp(agent?.sessionStartedAt)}
-          detail={agent?.fallbackAllowed ? "当前会话允许 fallback 提案。" : "当前会话要求优先使用 LLM。"}
-        />
-        <MetricCard
-          eyebrow="提案比例"
-          value={`${formatInteger(agent?.proposalBreakdown.llm)} / ${formatInteger(agent?.proposalBreakdown.fallback)}`}
-          detail="LLM 提案数 / fallback 提案数。"
-        />
-        <MetricCard
-          eyebrow="当前 Incumbent"
-          value={latestIncumbentRound?.experimentId ?? summary?.latestIncumbentExperimentId ?? "暂无"}
-          detail="当前视图里最近一次成为最优的实验。"
-        />
-        <MetricCard
-          eyebrow="事件数量"
-          value={formatInteger(scopedEvents.length)}
-          detail="当前页面正在使用的事件条数。"
-        />
-      </section>
-
-      <section className="panel-grid" id="dashboard-panels">
-        <section className="panel chart-panel">
-          <div className="panel-head">
-            <p className="panel-kicker">分数曲线</p>
-            <h2>Incumbent 演化过程</h2>
-          </div>
-          <Chart points={shownChartPoints} />
-        </section>
-
-        <section className="panel incumbent-panel">
-          <div className="panel-head">
-            <p className="panel-kicker">当前焦点</p>
-            <h2>最新反思与当前最优</h2>
-          </div>
-          <div className="incumbent-card">
-            <strong translate="no">{latestIncumbentRound?.experimentId ?? summary?.latestIncumbentExperimentId ?? "暂无最优实验"}</strong>
-            <p>预计完单数：{formatCount(latestIncumbentRound?.averageExpectedCompletedOrders ?? visibleBestRound?.averageExpectedCompletedOrders)}</p>
-            <p>总成本：{formatCount(latestIncumbentRound?.averageTotalCost ?? visibleBestRound?.averageTotalCost)}</p>
-            <p>
-              Provider：<span translate="no">{agent?.provider ?? "暂无"}</span>
-            </p>
-          </div>
-          {latestReflection ? (
-            <div className="insight-card">
-              <p className="insight-kicker">最新反思</p>
-              <strong translate="no">{latestReflection.experimentId}</strong>
-              <p>{latestReflection.reflectionSummary}</p>
-              {latestReflection.nextFocus.length > 0 ? (
-                <div className="list-block compact-list">
-                  <p className="list-label">下一步</p>
-                  <ul>
-                    {latestReflection.nextFocus.slice(0, 2).map((item) => (
-                      <li key={item}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <div className="empty-state">当前还没有可展示的 reflection 事件。</div>
-          )}
-        </section>
-      </section>
+      <SessionViewer
+        beats={shownBeats}
+        currentBeat={currentBeat}
+        rounds={shownRounds}
+        totalBeats={totalBeats}
+        visibleBeats={visibleBeatCount}
+        isPlaybackMode={isPlaybackMode}
+        onOpenDetails={handleOpenDetails}
+      />
 
       <section className="panel-grid">
         <section className="panel">
           <div className="panel-head">
-            <p className="panel-kicker">轮次账本</p>
-            <h2>每一轮到底试了什么</h2>
+            <p className="section-eyebrow">走势</p>
+            <h2>每一轮实验的成绩是如何变化的</h2>
+          </div>
+          <ScoreChart rounds={shownRounds} />
+        </section>
+
+        <section className="panel">
+          <div className="panel-head">
+            <p className="section-eyebrow">轮次摘要</p>
+            <h2>每一轮到底改了什么</h2>
           </div>
           <div className="round-grid">
             {shownRounds.length > 0 ? (
               shownRounds.map((round) => <RoundCard key={round.experimentId} round={round} />)
             ) : (
-              <div className="empty-state">当前没有轮次数据，先加载 replay 或上传本地 JSON。</div>
+              <div className="empty-state">播放还没走到完整结果，或者当前 replay 里没有轮次摘要。</div>
             )}
           </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel-head">
-            <p className="panel-kicker">Benchmark Case</p>
-            <h2>最难优化的样例</h2>
-          </div>
-          <CaseLeaderboard rows={caseLeaderboard} />
-        </section>
-      </section>
-
-      <section className="panel-grid">
-        <section className="panel">
-          <div className="panel-head">
-            <p className="panel-kicker">关键事件</p>
-            <h2>提案、反思与最优更新</h2>
-          </div>
-          <EventList events={highlightEvents} emptyLabel="当前还没有关键事件可展示。" />
-        </section>
-
-        <section className="panel">
-          <div className="panel-head">
-            <p className="panel-kicker">失败信号</p>
-            <h2>需要优先排查的异常</h2>
-          </div>
-          <EventList events={failureEvents} emptyLabel="当前视图里没有失败事件。" />
         </section>
       </section>
 
       <section className="panel">
         <div className="panel-head">
-          <p className="panel-kicker">原始事件流</p>
-          <h2>最后 12 条事件</h2>
+          <p className="section-eyebrow">案例观察</p>
+          <h2>哪些 benchmark case 最难</h2>
         </div>
-        <EventList events={rawEvents} emptyLabel="当前还没有原始事件可展示。" />
+        <div className="case-grid">
+          {caseLeaderboard.length > 0 ? (
+            caseLeaderboard.slice(0, 6).map((row, index) => (
+              <CaseCard key={row.caseId ?? row.instanceId ?? `case-${index}`} row={row} />
+            ))
+          ) : (
+            <div className="empty-state">当前 replay 还没有生成 case 排行数据。</div>
+          )}
+        </div>
       </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <p className="section-eyebrow">给技术同学看</p>
+          <h2>保留原始事件流，方便核对和排查</h2>
+        </div>
+        <DebugDrawer events={events} />
+      </section>
+
+      <DetailModal beat={detailBeat} onClose={handleCloseDetails} />
     </main>
   );
 }

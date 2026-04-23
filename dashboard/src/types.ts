@@ -8,6 +8,7 @@ export const EVENT_TYPES = {
   RESEARCH_LLM_PROPOSAL: "research.llm_proposal",
   RESEARCH_FALLBACK_PROPOSAL: "research.fallback_proposal",
   RESEARCH_LLM_REFLECTION: "research.llm_reflection",
+  RESEARCH_HEURISTIC_REFLECTION: "research.heuristic_reflection",
   RESEARCH_ROUND_STARTED: "research.round_started",
   RESEARCH_ROUND_COMPLETED: "research.round_completed",
   RESEARCH_ROUND_FAILED: "research.round_failed",
@@ -28,6 +29,7 @@ export interface ReplayEventPayload {
   experiment_id?: string;
   expected_completed_orders?: number;
   fallback_allowed?: boolean;
+  benchmark_profile?: Record<string, unknown>;
   hypothesis?: string;
   instance_id?: string;
   keep_reason?: string;
@@ -40,6 +42,8 @@ export interface ReplayEventPayload {
   solver_config?: Record<string, unknown>;
   solver_name?: string;
   source_path?: string;
+  state_path?: string;
+  stats?: Record<string, unknown>;
   status?: string;
   summary?: string;
   time_budget_ms?: number;

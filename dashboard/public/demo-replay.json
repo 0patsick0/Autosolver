@@ -1,49 +1,328 @@
 {
   "events": [
     {
-      "ts": "2026-04-23T08:25:29.673279+00:00",
+      "ts": "2026-04-23T10:01:23.285223+00:00",
       "type": "research.session_started",
       "payload": {
-        "benchmark_id": "demo-benchmark-manifest",
+        "benchmark_id": "cloud-probe-benchmark",
         "llm_enabled": true,
         "provider": "deepseek-v3-1-terminus@ark.cn-beijing.volces.com",
-        "fallback_allowed": false
+        "fallback_allowed": true,
+        "benchmark_profile": {
+          "case_count": 5,
+          "avg_orders": 37.2,
+          "avg_riders": 18.6,
+          "orders_per_rider": 2.0,
+          "avg_bundle_candidates": 15.0,
+          "avg_match_density": 1.0,
+          "weighted_cases": [
+            {
+              "case_id": "dense-bundle-grid",
+              "weight": 1.1
+            },
+            {
+              "case_id": "rider-shortage",
+              "weight": 1.4
+            },
+            {
+              "case_id": "multi-assign-pressure#1",
+              "weight": 1.0
+            },
+            {
+              "case_id": "multi-assign-pressure#2",
+              "weight": 1.0
+            },
+            {
+              "case_id": "generated-bundle-only",
+              "weight": 1.2
+            }
+          ]
+        }
       }
     },
     {
-      "ts": "2026-04-23T08:26:24.445431+00:00",
+      "ts": "2026-04-23T10:01:28.737129+00:00",
       "type": "research.llm_proposal",
       "payload": {
         "round_index": 0,
         "experiment_id": "llm-exp-1",
-        "hypothesis": "{'top_k_riders_per_order': 2, 'use_cpsat': True, 'generate_bundles_if_missing': True, 'bundle_candidate_pool_size': 6, 'max_bundle_size': 2, 'bundle_distance_threshold': 2.2, 'bundle_discount_factor': 0.92, 'bundle_acceptance_scale': 0.93, 'max_generated_bundles': 24, 'lns_destroy_fraction': 0.2, 'lns_iterations': 12}",
+        "hypothesis": "Start with balanced exploration: CP-SAT for optimality, moderate top-k and bundle generation to handle rider-shortage cases, and LNS for improvement within time budget.",
         "solver_config": {
           "time_budget_ms": 10000,
-          "top_k_riders_per_order": 3,
+          "top_k_riders_per_order": 2,
           "use_cpsat": true,
           "use_lns": true,
           "cpsat_max_orders": 120,
           "generate_bundles_if_missing": true,
-          "max_generated_bundles": 64,
-          "bundle_candidate_pool_size": 6,
+          "max_generated_bundles": 32,
+          "bundle_candidate_pool_size": 8,
           "max_bundle_size": 3,
           "bundle_distance_threshold": 2.5,
           "bundle_discount_factor": 0.92,
-          "bundle_acceptance_scale": 0.95,
-          "lns_destroy_fraction": 0.25,
-          "lns_iterations": 24,
+          "bundle_acceptance_scale": 0.93,
+          "lns_destroy_fraction": 0.2,
+          "lns_iterations": 16,
           "allow_llm_baseline": false
         },
         "notes": "llm-proposer"
       }
     },
     {
-      "ts": "2026-04-23T08:26:24.466536+00:00",
+      "ts": "2026-04-23T10:01:28.769166+00:00",
       "type": "research.round_started",
       "payload": {
         "round_index": 0,
         "experiment_id": "llm-exp-1",
-        "hypothesis": "{'top_k_riders_per_order': 2, 'use_cpsat': True, 'generate_bundles_if_missing': True, 'bundle_candidate_pool_size': 6, 'max_bundle_size': 2, 'bundle_distance_threshold': 2.2, 'bundle_discount_factor': 0.92, 'bundle_acceptance_scale': 0.93, 'max_generated_bundles': 24, 'lns_destroy_fraction': 0.2, 'lns_iterations': 12}",
+        "hypothesis": "Start with balanced exploration: CP-SAT for optimality, moderate top-k and bundle generation to handle rider-shortage cases, and LNS for improvement within time budget.",
+        "solver_config": {
+          "time_budget_ms": 10000,
+          "top_k_riders_per_order": 2,
+          "use_cpsat": true,
+          "use_lns": true,
+          "cpsat_max_orders": 120,
+          "generate_bundles_if_missing": true,
+          "max_generated_bundles": 32,
+          "bundle_candidate_pool_size": 8,
+          "max_bundle_size": 3,
+          "bundle_distance_threshold": 2.5,
+          "bundle_discount_factor": 0.92,
+          "bundle_acceptance_scale": 0.93,
+          "lns_destroy_fraction": 0.2,
+          "lns_iterations": 16,
+          "allow_llm_baseline": false
+        }
+      }
+    },
+    {
+      "ts": "2026-04-23T10:01:28.834610+00:00",
+      "type": "benchmark.case_completed",
+      "payload": {
+        "benchmark_id": "cloud-probe-benchmark",
+        "case_id": "dense-bundle-grid",
+        "instance_id": "cloud-dense-bundle-grid",
+        "source_path": "examples\\generated\\cloud_probe\\cloud-dense-bundle-grid.json",
+        "expected_completed_orders": 28.62671768,
+        "total_cost": 203.0373,
+        "elapsed_ms": 45,
+        "solver_name": "portfolio[cpsat]",
+        "status": "ok",
+        "weight": 1.1,
+        "stats": {
+          "strategy": "set_packing_cpsat",
+          "options_considered": 147,
+          "candidate_option_count": 147,
+          "candidate_option_breakdown": {
+            "single": 84,
+            "multi_assign": 42,
+            "bundle": 21
+          },
+          "selected_option_breakdown": {
+            "single": 24,
+            "multi_assign": 5,
+            "bundle": 2
+          },
+          "selected_bundle_order_count": 4,
+          "portfolio_seed": 0
+        }
+      }
+    },
+    {
+      "ts": "2026-04-23T10:01:28.896494+00:00",
+      "type": "benchmark.case_completed",
+      "payload": {
+        "benchmark_id": "cloud-probe-benchmark",
+        "case_id": "rider-shortage",
+        "instance_id": "cloud-rider-shortage",
+        "source_path": "examples\\generated\\cloud_probe\\cloud-rider-shortage.json",
+        "expected_completed_orders": 15.8113,
+        "total_cost": 100.2464,
+        "elapsed_ms": 42,
+        "solver_name": "portfolio[cpsat]",
+        "status": "ok",
+        "weight": 1.4,
+        "stats": {
+          "strategy": "set_packing_cpsat",
+          "options_considered": 168,
+          "candidate_option_count": 168,
+          "candidate_option_breakdown": {
+            "single": 96,
+            "multi_assign": 48,
+            "bundle": 24
+          },
+          "selected_option_breakdown": {
+            "single": 13,
+            "multi_assign": 0,
+            "bundle": 3
+          },
+          "selected_bundle_order_count": 6,
+          "portfolio_seed": 0
+        }
+      }
+    },
+    {
+      "ts": "2026-04-23T10:01:28.941095+00:00",
+      "type": "benchmark.case_completed",
+      "payload": {
+        "benchmark_id": "cloud-probe-benchmark",
+        "case_id": "multi-assign-pressure#1",
+        "instance_id": "cloud-multi-assign-pressure",
+        "source_path": "examples\\generated\\cloud_probe\\cloud-multi-assign-pressure.json",
+        "expected_completed_orders": 27.72923185,
+        "total_cost": 212.1428,
+        "elapsed_ms": 24,
+        "solver_name": "portfolio[cpsat]",
+        "status": "ok",
+        "weight": 1.0,
+        "stats": {
+          "strategy": "set_packing_cpsat",
+          "options_considered": 105,
+          "candidate_option_count": 105,
+          "candidate_option_breakdown": {
+            "single": 60,
+            "multi_assign": 30,
+            "bundle": 15
+          },
+          "selected_option_breakdown": {
+            "single": 17,
+            "multi_assign": 13,
+            "bundle": 0
+          },
+          "selected_bundle_order_count": 0,
+          "portfolio_seed": 0
+        }
+      }
+    },
+    {
+      "ts": "2026-04-23T10:01:28.986149+00:00",
+      "type": "benchmark.case_completed",
+      "payload": {
+        "benchmark_id": "cloud-probe-benchmark",
+        "case_id": "multi-assign-pressure#2",
+        "instance_id": "cloud-multi-assign-pressure",
+        "source_path": "examples\\generated\\cloud_probe\\cloud-multi-assign-pressure.json",
+        "expected_completed_orders": 27.72923185,
+        "total_cost": 212.1428,
+        "elapsed_ms": 26,
+        "solver_name": "portfolio[cpsat]",
+        "status": "ok",
+        "weight": 1.0,
+        "stats": {
+          "strategy": "set_packing_cpsat",
+          "options_considered": 105,
+          "candidate_option_count": 105,
+          "candidate_option_breakdown": {
+            "single": 60,
+            "multi_assign": 30,
+            "bundle": 15
+          },
+          "selected_option_breakdown": {
+            "single": 17,
+            "multi_assign": 13,
+            "bundle": 0
+          },
+          "selected_bundle_order_count": 0,
+          "portfolio_seed": 0
+        }
+      }
+    },
+    {
+      "ts": "2026-04-23T10:01:29.049259+00:00",
+      "type": "benchmark.case_completed",
+      "payload": {
+        "benchmark_id": "cloud-probe-benchmark",
+        "case_id": "generated-bundle-only",
+        "instance_id": "cloud-generated-bundle-only",
+        "source_path": "examples\\generated\\cloud_probe\\cloud-generated-bundle-only.json",
+        "expected_completed_orders": 21.71123535172391,
+        "total_cost": 141.04130709403614,
+        "elapsed_ms": 43,
+        "solver_name": "portfolio[cpsat]",
+        "status": "ok",
+        "weight": 1.2,
+        "stats": {
+          "strategy": "set_packing_cpsat",
+          "options_considered": 140,
+          "candidate_option_count": 140,
+          "candidate_option_breakdown": {
+            "single": 72,
+            "multi_assign": 36,
+            "bundle": 32
+          },
+          "selected_option_breakdown": {
+            "single": 18,
+            "multi_assign": 2,
+            "bundle": 2
+          },
+          "selected_bundle_order_count": 6,
+          "portfolio_seed": 0
+        }
+      }
+    },
+    {
+      "ts": "2026-04-23T10:01:29.069230+00:00",
+      "type": "benchmark.completed",
+      "payload": {
+        "benchmark_id": "cloud-probe-benchmark",
+        "case_count": 5,
+        "average_expected_completed_orders": 23.708272907029595,
+        "average_total_cost": 167.93353658120057,
+        "total_elapsed_ms": 180,
+        "total_weight": 5.7
+      }
+    },
+    {
+      "ts": "2026-04-23T10:01:29.090753+00:00",
+      "type": "research.round_completed",
+      "payload": {
+        "experiment_id": "llm-exp-1",
+        "status": "keep",
+        "average_expected_completed_orders": 23.708272907029595,
+        "average_total_cost": 167.93353658120057,
+        "total_elapsed_ms": 180
+      }
+    },
+    {
+      "ts": "2026-04-23T10:01:29.109987+00:00",
+      "type": "research.incumbent_updated",
+      "payload": {
+        "experiment_id": "llm-exp-1",
+        "average_expected_completed_orders": 23.708272907029595,
+        "average_total_cost": 167.93353658120057
+      }
+    },
+    {
+      "ts": "2026-04-23T10:01:36.459859+00:00",
+      "type": "research.llm_reflection",
+      "payload": {
+        "round_index": 0,
+        "experiment_id": "llm-exp-1",
+        "summary": "Initial baseline achieved 23.7 completed orders with moderate cost, establishing a solid foundation for rider-shortage scenarios.",
+        "keep_reason": "No incumbent exists, so this result serves as the starting benchmark.",
+        "risks": [
+          "Top-k=2 may miss viable rider assignments in dense areas",
+          "Bundle pool size of 8 may limit exploration of bundle combinations",
+          "LNS destroy fraction of 0.2 may be too conservative for significant improvements"
+        ],
+        "next_focus": [
+          "Test higher top-k values to capture more rider options",
+          "Increase bundle pool size to explore more bundle combinations",
+          "Experiment with more aggressive LNS destruction rates",
+          "Validate bundle distance threshold of 2.5 against spatial distribution"
+        ],
+        "avoid_patterns": [
+          "Over-relying on CP-SAT for large instances without LNS refinement",
+          "Keeping bundle generation too restrictive early in search",
+          "Using identical parameters across different problem densities"
+        ]
+      }
+    },
+    {
+      "ts": "2026-04-23T10:01:42.797476+00:00",
+      "type": "research.llm_proposal",
+      "payload": {
+        "round_index": 1,
+        "experiment_id": "llm-exp-2",
+        "hypothesis": "Explore more aggressive bundle generation and rider assignment to address rider-shortage cases. Increase top-k riders to capture more assignment options and expand bundle candidate pool for better bundle exploration while maintaining CP-SAT optimality.",
         "solver_config": {
           "time_budget_ms": 10000,
           "top_k_riders_per_order": 3,
@@ -52,253 +331,136 @@
           "cpsat_max_orders": 120,
           "generate_bundles_if_missing": true,
           "max_generated_bundles": 64,
-          "bundle_candidate_pool_size": 6,
+          "bundle_candidate_pool_size": 8,
           "max_bundle_size": 3,
           "bundle_distance_threshold": 2.5,
           "bundle_discount_factor": 0.92,
-          "bundle_acceptance_scale": 0.95,
-          "lns_destroy_fraction": 0.25,
-          "lns_iterations": 24,
-          "allow_llm_baseline": false
-        }
-      }
-    },
-    {
-      "ts": "2026-04-23T08:26:24.518257+00:00",
-      "type": "benchmark.case_completed",
-      "payload": {
-        "benchmark_id": "demo-benchmark-manifest",
-        "case_id": "nearby-cluster",
-        "instance_id": "benchmark-case-1",
-        "source_path": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_1.json",
-        "expected_completed_orders": 1.6488,
-        "total_cost": 14.4,
-        "elapsed_ms": 27,
-        "solver_name": "portfolio[cpsat]",
-        "status": "ok",
-        "weight": 1.0,
-        "stats": {
-          "strategy": "set_packing_cpsat",
-          "options_considered": 7,
-          "candidate_option_count": 7,
-          "candidate_option_breakdown": {
-            "single": 4,
-            "multi_assign": 2,
-            "bundle": 1
-          },
-          "selected_option_breakdown": {
-            "single": 1,
-            "multi_assign": 1,
-            "bundle": 0
-          },
-          "selected_bundle_order_count": 0,
-          "portfolio_seed": 0
-        }
-      }
-    },
-    {
-      "ts": "2026-04-23T08:26:24.549901+00:00",
-      "type": "benchmark.case_completed",
-      "payload": {
-        "benchmark_id": "demo-benchmark-manifest",
-        "case_id": "split-cluster#1",
-        "instance_id": "benchmark-case-2",
-        "source_path": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_2.json",
-        "expected_completed_orders": 2.604,
-        "total_cost": 16.8,
-        "elapsed_ms": 12,
-        "solver_name": "portfolio[cpsat]",
-        "status": "ok",
-        "weight": 1.3,
-        "stats": {
-          "strategy": "set_packing_cpsat",
-          "options_considered": 11,
-          "candidate_option_count": 11,
-          "candidate_option_breakdown": {
-            "single": 6,
-            "multi_assign": 3,
-            "bundle": 2
-          },
-          "selected_option_breakdown": {
-            "single": 2,
-            "multi_assign": 1,
-            "bundle": 0
-          },
-          "selected_bundle_order_count": 0,
-          "portfolio_seed": 0
-        }
-      }
-    },
-    {
-      "ts": "2026-04-23T08:26:24.579908+00:00",
-      "type": "benchmark.case_completed",
-      "payload": {
-        "benchmark_id": "demo-benchmark-manifest",
-        "case_id": "split-cluster#2",
-        "instance_id": "benchmark-case-2",
-        "source_path": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_2.json",
-        "expected_completed_orders": 2.604,
-        "total_cost": 16.8,
-        "elapsed_ms": 9,
-        "solver_name": "portfolio[cpsat]",
-        "status": "ok",
-        "weight": 1.3,
-        "stats": {
-          "strategy": "set_packing_cpsat",
-          "options_considered": 11,
-          "candidate_option_count": 11,
-          "candidate_option_breakdown": {
-            "single": 6,
-            "multi_assign": 3,
-            "bundle": 2
-          },
-          "selected_option_breakdown": {
-            "single": 2,
-            "multi_assign": 1,
-            "bundle": 0
-          },
-          "selected_bundle_order_count": 0,
-          "portfolio_seed": 0
-        }
-      }
-    },
-    {
-      "ts": "2026-04-23T08:26:24.598678+00:00",
-      "type": "benchmark.completed",
-      "payload": {
-        "benchmark_id": "demo-benchmark-manifest",
-        "case_count": 3,
-        "average_expected_completed_orders": 2.338666666666667,
-        "average_total_cost": 16.133333333333336,
-        "total_elapsed_ms": 48,
-        "total_weight": 3.5999999999999996
-      }
-    },
-    {
-      "ts": "2026-04-23T08:26:24.616437+00:00",
-      "type": "research.round_completed",
-      "payload": {
-        "experiment_id": "llm-exp-1",
-        "status": "keep",
-        "average_expected_completed_orders": 2.338666666666667,
-        "average_total_cost": 16.133333333333336,
-        "total_elapsed_ms": 48
-      }
-    },
-    {
-      "ts": "2026-04-23T08:26:24.635023+00:00",
-      "type": "research.incumbent_updated",
-      "payload": {
-        "experiment_id": "llm-exp-1",
-        "average_expected_completed_orders": 2.338666666666667,
-        "average_total_cost": 16.133333333333336
-      }
-    },
-    {
-      "ts": "2026-04-23T08:26:31.750566+00:00",
-      "type": "research.llm_reflection",
-      "payload": {
-        "round_index": 0,
-        "experiment_id": "llm-exp-1",
-        "summary": "Initial experiment established baseline with moderate bundle constraints and fast solve time.",
-        "keep_reason": "First experiment becomes incumbent by default.",
-        "risks": [
-          "Max bundle size 2 may limit cost savings from larger bundles",
-          "Low bundle pool size 6 may miss good combinations",
-          "Fast solve time suggests under-utilized search budget"
-        ],
-        "next_focus": [
-          "Test larger max_bundle_size (3-4)",
-          "Increase bundle_candidate_pool_size",
-          "Explore higher bundle_discount_factor values",
-          "Test longer LNS iterations with larger destroy fraction"
-        ],
-        "avoid_patterns": [
-          "Over-constraining bundle generation",
-          "Premature optimization without exploring parameter space",
-          "Ignoring solve time efficiency gains"
-        ]
-      }
-    },
-    {
-      "ts": "2026-04-23T08:26:37.915262+00:00",
-      "type": "research.fallback_proposal",
-      "payload": {
-        "round_index": 1,
-        "experiment_id": "exp-12",
-        "hypothesis": "Adjust top_k, bundle generation, and local search neighborhood for benchmark demo-benchmark-manifest with config {\"allow_llm_baseline\": false, \"bundle_acceptance_scale\": 0.97, \"bundle_candidate_pool_size\": 8, \"bundle_discount_factor\": 0.96, \"bundle_distance_threshold\": 2.8, \"cpsat_max_orders\": 120, \"generate_bundles_if_missing\": false, \"lns_destroy_fraction\": 0.25, \"lns_iterations\": 20, \"max_bundle_size\": 3, \"max_generated_bundles\": 48, \"time_budget_ms\": 10000, \"top_k_riders_per_order\": 3, \"use_cpsat\": false, \"use_lns\": true}.",
-        "solver_config": {
-          "time_budget_ms": 10000,
-          "top_k_riders_per_order": 3,
-          "use_cpsat": false,
-          "use_lns": true,
-          "cpsat_max_orders": 120,
-          "generate_bundles_if_missing": false,
-          "max_generated_bundles": 48,
-          "bundle_candidate_pool_size": 8,
-          "max_bundle_size": 3,
-          "bundle_distance_threshold": 2.8,
-          "bundle_discount_factor": 0.96,
-          "bundle_acceptance_scale": 0.97,
-          "lns_destroy_fraction": 0.25,
-          "lns_iterations": 20,
+          "bundle_acceptance_scale": 0.93,
+          "lns_destroy_fraction": 0.2,
+          "lns_iterations": 16,
           "allow_llm_baseline": false
         },
-        "notes": "fallback-proposer"
+        "notes": "llm-proposer"
       }
     },
     {
-      "ts": "2026-04-23T08:26:37.936049+00:00",
+      "ts": "2026-04-23T10:01:42.817593+00:00",
       "type": "research.round_started",
       "payload": {
         "round_index": 1,
-        "experiment_id": "exp-12",
-        "hypothesis": "Adjust top_k, bundle generation, and local search neighborhood for benchmark demo-benchmark-manifest with config {\"allow_llm_baseline\": false, \"bundle_acceptance_scale\": 0.97, \"bundle_candidate_pool_size\": 8, \"bundle_discount_factor\": 0.96, \"bundle_distance_threshold\": 2.8, \"cpsat_max_orders\": 120, \"generate_bundles_if_missing\": false, \"lns_destroy_fraction\": 0.25, \"lns_iterations\": 20, \"max_bundle_size\": 3, \"max_generated_bundles\": 48, \"time_budget_ms\": 10000, \"top_k_riders_per_order\": 3, \"use_cpsat\": false, \"use_lns\": true}.",
+        "experiment_id": "llm-exp-2",
+        "hypothesis": "Explore more aggressive bundle generation and rider assignment to address rider-shortage cases. Increase top-k riders to capture more assignment options and expand bundle candidate pool for better bundle exploration while maintaining CP-SAT optimality.",
         "solver_config": {
           "time_budget_ms": 10000,
           "top_k_riders_per_order": 3,
-          "use_cpsat": false,
+          "use_cpsat": true,
           "use_lns": true,
           "cpsat_max_orders": 120,
-          "generate_bundles_if_missing": false,
-          "max_generated_bundles": 48,
+          "generate_bundles_if_missing": true,
+          "max_generated_bundles": 64,
           "bundle_candidate_pool_size": 8,
           "max_bundle_size": 3,
-          "bundle_distance_threshold": 2.8,
-          "bundle_discount_factor": 0.96,
-          "bundle_acceptance_scale": 0.97,
-          "lns_destroy_fraction": 0.25,
-          "lns_iterations": 20,
+          "bundle_distance_threshold": 2.5,
+          "bundle_discount_factor": 0.92,
+          "bundle_acceptance_scale": 0.93,
+          "lns_destroy_fraction": 0.2,
+          "lns_iterations": 16,
           "allow_llm_baseline": false
         }
       }
     },
     {
-      "ts": "2026-04-23T08:26:37.956662+00:00",
+      "ts": "2026-04-23T10:01:42.893357+00:00",
       "type": "benchmark.case_completed",
       "payload": {
-        "benchmark_id": "demo-benchmark-manifest",
-        "case_id": "nearby-cluster",
-        "instance_id": "benchmark-case-1",
-        "source_path": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_1.json",
-        "expected_completed_orders": 1.62,
-        "total_cost": 14.6,
-        "elapsed_ms": 1,
-        "solver_name": "portfolio[greedy]",
+        "benchmark_id": "cloud-probe-benchmark",
+        "case_id": "dense-bundle-grid",
+        "instance_id": "cloud-dense-bundle-grid",
+        "source_path": "examples\\generated\\cloud_probe\\cloud-dense-bundle-grid.json",
+        "expected_completed_orders": 30.49542744,
+        "total_cost": 247.228,
+        "elapsed_ms": 58,
+        "solver_name": "portfolio[cpsat]",
+        "status": "ok",
+        "weight": 1.1,
+        "stats": {
+          "strategy": "set_packing_cpsat",
+          "options_considered": 315,
+          "candidate_option_count": 315,
+          "candidate_option_breakdown": {
+            "single": 126,
+            "multi_assign": 168,
+            "bundle": 21
+          },
+          "selected_option_breakdown": {
+            "single": 21,
+            "multi_assign": 10,
+            "bundle": 2
+          },
+          "selected_bundle_order_count": 4,
+          "portfolio_seed": 1
+        }
+      }
+    },
+    {
+      "ts": "2026-04-23T10:01:42.986260+00:00",
+      "type": "benchmark.case_completed",
+      "payload": {
+        "benchmark_id": "cloud-probe-benchmark",
+        "case_id": "rider-shortage",
+        "instance_id": "cloud-rider-shortage",
+        "source_path": "examples\\generated\\cloud_probe\\cloud-rider-shortage.json",
+        "expected_completed_orders": 15.8113,
+        "total_cost": 100.2464,
+        "elapsed_ms": 72,
+        "solver_name": "portfolio[cpsat]",
+        "status": "ok",
+        "weight": 1.4,
+        "stats": {
+          "strategy": "set_packing_cpsat",
+          "options_considered": 360,
+          "candidate_option_count": 360,
+          "candidate_option_breakdown": {
+            "single": 144,
+            "multi_assign": 192,
+            "bundle": 24
+          },
+          "selected_option_breakdown": {
+            "single": 13,
+            "multi_assign": 0,
+            "bundle": 3
+          },
+          "selected_bundle_order_count": 6,
+          "portfolio_seed": 1
+        }
+      }
+    },
+    {
+      "ts": "2026-04-23T10:01:43.062570+00:00",
+      "type": "benchmark.case_completed",
+      "payload": {
+        "benchmark_id": "cloud-probe-benchmark",
+        "case_id": "multi-assign-pressure#1",
+        "instance_id": "cloud-multi-assign-pressure",
+        "source_path": "examples\\generated\\cloud_probe\\cloud-multi-assign-pressure.json",
+        "expected_completed_orders": 28.400812935881,
+        "total_cost": 255.201,
+        "elapsed_ms": 53,
+        "solver_name": "portfolio[cpsat]",
         "status": "ok",
         "weight": 1.0,
         "stats": {
-          "strategy": "density_greedy",
-          "options_considered": 6,
-          "candidate_option_count": 6,
+          "strategy": "set_packing_cpsat",
+          "options_considered": 225,
+          "candidate_option_count": 225,
           "candidate_option_breakdown": {
-            "single": 4,
-            "multi_assign": 2,
-            "bundle": 0
+            "single": 90,
+            "multi_assign": 120,
+            "bundle": 15
           },
           "selected_option_breakdown": {
-            "single": 1,
-            "multi_assign": 1,
+            "single": 12,
+            "multi_assign": 18,
             "bundle": 0
           },
           "selected_bundle_order_count": 0,
@@ -307,31 +469,31 @@
       }
     },
     {
-      "ts": "2026-04-23T08:26:37.974721+00:00",
+      "ts": "2026-04-23T10:01:43.122815+00:00",
       "type": "benchmark.case_completed",
       "payload": {
-        "benchmark_id": "demo-benchmark-manifest",
-        "case_id": "split-cluster#1",
-        "instance_id": "benchmark-case-2",
-        "source_path": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_2.json",
-        "expected_completed_orders": 1.8378,
-        "total_cost": 18.9,
-        "elapsed_ms": 1,
-        "solver_name": "portfolio[greedy]",
+        "benchmark_id": "cloud-probe-benchmark",
+        "case_id": "multi-assign-pressure#2",
+        "instance_id": "cloud-multi-assign-pressure",
+        "source_path": "examples\\generated\\cloud_probe\\cloud-multi-assign-pressure.json",
+        "expected_completed_orders": 28.400812935881,
+        "total_cost": 255.201,
+        "elapsed_ms": 38,
+        "solver_name": "portfolio[cpsat]",
         "status": "ok",
-        "weight": 1.3,
+        "weight": 1.0,
         "stats": {
-          "strategy": "density_greedy",
-          "options_considered": 9,
-          "candidate_option_count": 9,
+          "strategy": "set_packing_cpsat",
+          "options_considered": 225,
+          "candidate_option_count": 225,
           "candidate_option_breakdown": {
-            "single": 6,
-            "multi_assign": 3,
-            "bundle": 0
+            "single": 90,
+            "multi_assign": 120,
+            "bundle": 15
           },
           "selected_option_breakdown": {
-            "single": 0,
-            "multi_assign": 2,
+            "single": 12,
+            "multi_assign": 18,
             "bundle": 0
           },
           "selected_bundle_order_count": 0,
@@ -340,86 +502,92 @@
       }
     },
     {
-      "ts": "2026-04-23T08:26:37.994937+00:00",
+      "ts": "2026-04-23T10:01:43.201529+00:00",
       "type": "benchmark.case_completed",
       "payload": {
-        "benchmark_id": "demo-benchmark-manifest",
-        "case_id": "split-cluster#2",
-        "instance_id": "benchmark-case-2",
-        "source_path": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_2.json",
-        "expected_completed_orders": 1.8378,
-        "total_cost": 18.9,
-        "elapsed_ms": 1,
-        "solver_name": "portfolio[greedy]",
+        "benchmark_id": "cloud-probe-benchmark",
+        "case_id": "generated-bundle-only",
+        "instance_id": "cloud-generated-bundle-only",
+        "source_path": "examples\\generated\\cloud_probe\\cloud-generated-bundle-only.json",
+        "expected_completed_orders": 21.72873535172391,
+        "total_cost": 141.69310709403612,
+        "elapsed_ms": 60,
+        "solver_name": "portfolio[cpsat]",
         "status": "ok",
-        "weight": 1.3,
+        "weight": 1.2,
         "stats": {
-          "strategy": "density_greedy",
-          "options_considered": 9,
-          "candidate_option_count": 9,
+          "strategy": "set_packing_cpsat",
+          "options_considered": 316,
+          "candidate_option_count": 316,
           "candidate_option_breakdown": {
-            "single": 6,
-            "multi_assign": 3,
-            "bundle": 0
+            "single": 108,
+            "multi_assign": 144,
+            "bundle": 64
           },
           "selected_option_breakdown": {
-            "single": 0,
+            "single": 18,
             "multi_assign": 2,
-            "bundle": 0
+            "bundle": 2
           },
-          "selected_bundle_order_count": 0,
+          "selected_bundle_order_count": 6,
           "portfolio_seed": 1
         }
       }
     },
     {
-      "ts": "2026-04-23T08:26:38.015492+00:00",
+      "ts": "2026-04-23T10:01:43.222500+00:00",
       "type": "benchmark.completed",
       "payload": {
-        "benchmark_id": "demo-benchmark-manifest",
-        "case_count": 3,
-        "average_expected_completed_orders": 1.7773000000000003,
-        "average_total_cost": 17.70555555555556,
-        "total_elapsed_ms": 3,
-        "total_weight": 3.5999999999999996
+        "benchmark_id": "cloud-probe-benchmark",
+        "case_count": 5,
+        "average_expected_completed_orders": 24.30822780312819,
+        "average_total_cost": 191.70692780927075,
+        "total_elapsed_ms": 281,
+        "total_weight": 5.7
       }
     },
     {
-      "ts": "2026-04-23T08:26:38.037686+00:00",
+      "ts": "2026-04-23T10:01:43.241391+00:00",
       "type": "research.round_completed",
       "payload": {
-        "experiment_id": "exp-12",
-        "status": "discard",
-        "average_expected_completed_orders": 1.7773000000000003,
-        "average_total_cost": 17.70555555555556,
-        "total_elapsed_ms": 3
+        "experiment_id": "llm-exp-2",
+        "status": "keep",
+        "average_expected_completed_orders": 24.30822780312819,
+        "average_total_cost": 191.70692780927075,
+        "total_elapsed_ms": 281
       }
     },
     {
-      "ts": "2026-04-23T08:26:45.203980+00:00",
+      "ts": "2026-04-23T10:01:43.260526+00:00",
+      "type": "research.incumbent_updated",
+      "payload": {
+        "experiment_id": "llm-exp-2",
+        "average_expected_completed_orders": 24.30822780312819,
+        "average_total_cost": 191.70692780927075
+      }
+    },
+    {
+      "ts": "2026-04-23T10:01:50.597647+00:00",
       "type": "research.llm_reflection",
       "payload": {
         "round_index": 1,
-        "experiment_id": "exp-12",
-        "summary": "Experiment exp-12 regressed significantly on completed orders and cost compared to the incumbent, indicating the parameter adjustments were detrimental.",
-        "keep_reason": "N/A - this experiment was discarded due to performance regression.",
+        "experiment_id": "llm-exp-2",
+        "summary": "Experiment llm-exp-2 increased completed orders by 2.5% but at a 14% cost increase, suggesting aggressive bundling found more assignments but with less efficiency.",
+        "keep_reason": "The significant increase in completed orders justifies keeping this configuration for further analysis.",
         "risks": [
-          "Bundle pool size of 8 may be too restrictive for effective LNS",
-          "Low bundle discount factor (0.96) reduces bundling incentive",
-          "High bundle acceptance scale (0.97) may reject beneficial bundles",
-          "LNS destroy fraction of 0.25 may be too aggressive for small problems"
+          "Cost per completed order increased substantially",
+          "Bundle generation parameters may be too aggressive on distance/discount",
+          "Higher computational time suggests approaching solver limits"
         ],
         "next_focus": [
-          "Increase bundle candidate pool size to improve LNS diversity",
-          "Reduce bundle acceptance scale to encourage more bundling",
-          "Test lower LNS destroy fraction for more gradual improvement",
-          "Re-enable bundle generation to expand solution space"
+          "Optimize bundle distance and discount factors to reduce cost inflation",
+          "Test intermediate bundle pool sizes between current and previous",
+          "Monitor solver time as complexity increases"
         ],
         "avoid_patterns": [
-          "Restricting bundle pool below 10-12 candidates",
-          "Using high acceptance thresholds with low discount factors",
-          "Aggressive LNS destruction without sufficient iteration budget",
-          "Disabling bundle generation entirely"
+          "Sacrificing cost efficiency for marginal order completion gains",
+          "Expanding bundle parameters without cost controls",
+          "Ignoring computational time trends"
         ]
       }
     }
@@ -427,15 +595,264 @@
   "rounds": [
     {
       "experiment_id": "llm-exp-1",
-      "hypothesis": "{'top_k_riders_per_order': 2, 'use_cpsat': True, 'generate_bundles_if_missing': True, 'bundle_candidate_pool_size': 6, 'max_bundle_size': 2, 'bundle_distance_threshold': 2.2, 'bundle_discount_factor': 0.92, 'bundle_acceptance_scale': 0.93, 'max_generated_bundles': 24, 'lns_destroy_fraction': 0.2, 'lns_iterations': 12}",
+      "hypothesis": "Start with balanced exploration: CP-SAT for optimality, moderate top-k and bundle generation to handle rider-shortage cases, and LNS for improvement within time budget.",
       "events": [
         {
-          "ts": "2026-04-23T08:26:24.466536+00:00",
+          "ts": "2026-04-23T10:01:28.769166+00:00",
           "type": "research.round_started",
           "payload": {
             "round_index": 0,
             "experiment_id": "llm-exp-1",
-            "hypothesis": "{'top_k_riders_per_order': 2, 'use_cpsat': True, 'generate_bundles_if_missing': True, 'bundle_candidate_pool_size': 6, 'max_bundle_size': 2, 'bundle_distance_threshold': 2.2, 'bundle_discount_factor': 0.92, 'bundle_acceptance_scale': 0.93, 'max_generated_bundles': 24, 'lns_destroy_fraction': 0.2, 'lns_iterations': 12}",
+            "hypothesis": "Start with balanced exploration: CP-SAT for optimality, moderate top-k and bundle generation to handle rider-shortage cases, and LNS for improvement within time budget.",
+            "solver_config": {
+              "time_budget_ms": 10000,
+              "top_k_riders_per_order": 2,
+              "use_cpsat": true,
+              "use_lns": true,
+              "cpsat_max_orders": 120,
+              "generate_bundles_if_missing": true,
+              "max_generated_bundles": 32,
+              "bundle_candidate_pool_size": 8,
+              "max_bundle_size": 3,
+              "bundle_distance_threshold": 2.5,
+              "bundle_discount_factor": 0.92,
+              "bundle_acceptance_scale": 0.93,
+              "lns_destroy_fraction": 0.2,
+              "lns_iterations": 16,
+              "allow_llm_baseline": false
+            }
+          }
+        },
+        {
+          "ts": "2026-04-23T10:01:28.834610+00:00",
+          "type": "benchmark.case_completed",
+          "payload": {
+            "benchmark_id": "cloud-probe-benchmark",
+            "case_id": "dense-bundle-grid",
+            "instance_id": "cloud-dense-bundle-grid",
+            "source_path": "examples\\generated\\cloud_probe\\cloud-dense-bundle-grid.json",
+            "expected_completed_orders": 28.62671768,
+            "total_cost": 203.0373,
+            "elapsed_ms": 45,
+            "solver_name": "portfolio[cpsat]",
+            "status": "ok",
+            "weight": 1.1,
+            "stats": {
+              "strategy": "set_packing_cpsat",
+              "options_considered": 147,
+              "candidate_option_count": 147,
+              "candidate_option_breakdown": {
+                "single": 84,
+                "multi_assign": 42,
+                "bundle": 21
+              },
+              "selected_option_breakdown": {
+                "single": 24,
+                "multi_assign": 5,
+                "bundle": 2
+              },
+              "selected_bundle_order_count": 4,
+              "portfolio_seed": 0
+            }
+          }
+        },
+        {
+          "ts": "2026-04-23T10:01:28.896494+00:00",
+          "type": "benchmark.case_completed",
+          "payload": {
+            "benchmark_id": "cloud-probe-benchmark",
+            "case_id": "rider-shortage",
+            "instance_id": "cloud-rider-shortage",
+            "source_path": "examples\\generated\\cloud_probe\\cloud-rider-shortage.json",
+            "expected_completed_orders": 15.8113,
+            "total_cost": 100.2464,
+            "elapsed_ms": 42,
+            "solver_name": "portfolio[cpsat]",
+            "status": "ok",
+            "weight": 1.4,
+            "stats": {
+              "strategy": "set_packing_cpsat",
+              "options_considered": 168,
+              "candidate_option_count": 168,
+              "candidate_option_breakdown": {
+                "single": 96,
+                "multi_assign": 48,
+                "bundle": 24
+              },
+              "selected_option_breakdown": {
+                "single": 13,
+                "multi_assign": 0,
+                "bundle": 3
+              },
+              "selected_bundle_order_count": 6,
+              "portfolio_seed": 0
+            }
+          }
+        },
+        {
+          "ts": "2026-04-23T10:01:28.941095+00:00",
+          "type": "benchmark.case_completed",
+          "payload": {
+            "benchmark_id": "cloud-probe-benchmark",
+            "case_id": "multi-assign-pressure#1",
+            "instance_id": "cloud-multi-assign-pressure",
+            "source_path": "examples\\generated\\cloud_probe\\cloud-multi-assign-pressure.json",
+            "expected_completed_orders": 27.72923185,
+            "total_cost": 212.1428,
+            "elapsed_ms": 24,
+            "solver_name": "portfolio[cpsat]",
+            "status": "ok",
+            "weight": 1.0,
+            "stats": {
+              "strategy": "set_packing_cpsat",
+              "options_considered": 105,
+              "candidate_option_count": 105,
+              "candidate_option_breakdown": {
+                "single": 60,
+                "multi_assign": 30,
+                "bundle": 15
+              },
+              "selected_option_breakdown": {
+                "single": 17,
+                "multi_assign": 13,
+                "bundle": 0
+              },
+              "selected_bundle_order_count": 0,
+              "portfolio_seed": 0
+            }
+          }
+        },
+        {
+          "ts": "2026-04-23T10:01:28.986149+00:00",
+          "type": "benchmark.case_completed",
+          "payload": {
+            "benchmark_id": "cloud-probe-benchmark",
+            "case_id": "multi-assign-pressure#2",
+            "instance_id": "cloud-multi-assign-pressure",
+            "source_path": "examples\\generated\\cloud_probe\\cloud-multi-assign-pressure.json",
+            "expected_completed_orders": 27.72923185,
+            "total_cost": 212.1428,
+            "elapsed_ms": 26,
+            "solver_name": "portfolio[cpsat]",
+            "status": "ok",
+            "weight": 1.0,
+            "stats": {
+              "strategy": "set_packing_cpsat",
+              "options_considered": 105,
+              "candidate_option_count": 105,
+              "candidate_option_breakdown": {
+                "single": 60,
+                "multi_assign": 30,
+                "bundle": 15
+              },
+              "selected_option_breakdown": {
+                "single": 17,
+                "multi_assign": 13,
+                "bundle": 0
+              },
+              "selected_bundle_order_count": 0,
+              "portfolio_seed": 0
+            }
+          }
+        },
+        {
+          "ts": "2026-04-23T10:01:29.049259+00:00",
+          "type": "benchmark.case_completed",
+          "payload": {
+            "benchmark_id": "cloud-probe-benchmark",
+            "case_id": "generated-bundle-only",
+            "instance_id": "cloud-generated-bundle-only",
+            "source_path": "examples\\generated\\cloud_probe\\cloud-generated-bundle-only.json",
+            "expected_completed_orders": 21.71123535172391,
+            "total_cost": 141.04130709403614,
+            "elapsed_ms": 43,
+            "solver_name": "portfolio[cpsat]",
+            "status": "ok",
+            "weight": 1.2,
+            "stats": {
+              "strategy": "set_packing_cpsat",
+              "options_considered": 140,
+              "candidate_option_count": 140,
+              "candidate_option_breakdown": {
+                "single": 72,
+                "multi_assign": 36,
+                "bundle": 32
+              },
+              "selected_option_breakdown": {
+                "single": 18,
+                "multi_assign": 2,
+                "bundle": 2
+              },
+              "selected_bundle_order_count": 6,
+              "portfolio_seed": 0
+            }
+          }
+        },
+        {
+          "ts": "2026-04-23T10:01:29.069230+00:00",
+          "type": "benchmark.completed",
+          "payload": {
+            "benchmark_id": "cloud-probe-benchmark",
+            "case_count": 5,
+            "average_expected_completed_orders": 23.708272907029595,
+            "average_total_cost": 167.93353658120057,
+            "total_elapsed_ms": 180,
+            "total_weight": 5.7
+          }
+        },
+        {
+          "ts": "2026-04-23T10:01:29.090753+00:00",
+          "type": "research.round_completed",
+          "payload": {
+            "experiment_id": "llm-exp-1",
+            "status": "keep",
+            "average_expected_completed_orders": 23.708272907029595,
+            "average_total_cost": 167.93353658120057,
+            "total_elapsed_ms": 180
+          }
+        },
+        {
+          "ts": "2026-04-23T10:01:29.109987+00:00",
+          "type": "research.incumbent_updated",
+          "payload": {
+            "experiment_id": "llm-exp-1",
+            "average_expected_completed_orders": 23.708272907029595,
+            "average_total_cost": 167.93353658120057
+          }
+        },
+        {
+          "ts": "2026-04-23T10:01:36.459859+00:00",
+          "type": "research.llm_reflection",
+          "payload": {
+            "round_index": 0,
+            "experiment_id": "llm-exp-1",
+            "summary": "Initial baseline achieved 23.7 completed orders with moderate cost, establishing a solid foundation for rider-shortage scenarios.",
+            "keep_reason": "No incumbent exists, so this result serves as the starting benchmark.",
+            "risks": [
+              "Top-k=2 may miss viable rider assignments in dense areas",
+              "Bundle pool size of 8 may limit exploration of bundle combinations",
+              "LNS destroy fraction of 0.2 may be too conservative for significant improvements"
+            ],
+            "next_focus": [
+              "Test higher top-k values to capture more rider options",
+              "Increase bundle pool size to explore more bundle combinations",
+              "Experiment with more aggressive LNS destruction rates",
+              "Validate bundle distance threshold of 2.5 against spatial distribution"
+            ],
+            "avoid_patterns": [
+              "Over-relying on CP-SAT for large instances without LNS refinement",
+              "Keeping bundle generation too restrictive early in search",
+              "Using identical parameters across different problem densities"
+            ]
+          }
+        },
+        {
+          "ts": "2026-04-23T10:01:42.797476+00:00",
+          "type": "research.llm_proposal",
+          "payload": {
+            "round_index": 1,
+            "experiment_id": "llm-exp-2",
+            "hypothesis": "Explore more aggressive bundle generation and rider assignment to address rider-shortage cases. Increase top-k riders to capture more assignment options and expand bundle candidate pool for better bundle exploration while maintaining CP-SAT optimality.",
             "solver_config": {
               "time_budget_ms": 10000,
               "top_k_riders_per_order": 3,
@@ -444,259 +861,142 @@
               "cpsat_max_orders": 120,
               "generate_bundles_if_missing": true,
               "max_generated_bundles": 64,
-              "bundle_candidate_pool_size": 6,
+              "bundle_candidate_pool_size": 8,
               "max_bundle_size": 3,
               "bundle_distance_threshold": 2.5,
               "bundle_discount_factor": 0.92,
-              "bundle_acceptance_scale": 0.95,
-              "lns_destroy_fraction": 0.25,
-              "lns_iterations": 24,
-              "allow_llm_baseline": false
-            }
-          }
-        },
-        {
-          "ts": "2026-04-23T08:26:24.518257+00:00",
-          "type": "benchmark.case_completed",
-          "payload": {
-            "benchmark_id": "demo-benchmark-manifest",
-            "case_id": "nearby-cluster",
-            "instance_id": "benchmark-case-1",
-            "source_path": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_1.json",
-            "expected_completed_orders": 1.6488,
-            "total_cost": 14.4,
-            "elapsed_ms": 27,
-            "solver_name": "portfolio[cpsat]",
-            "status": "ok",
-            "weight": 1.0,
-            "stats": {
-              "strategy": "set_packing_cpsat",
-              "options_considered": 7,
-              "candidate_option_count": 7,
-              "candidate_option_breakdown": {
-                "single": 4,
-                "multi_assign": 2,
-                "bundle": 1
-              },
-              "selected_option_breakdown": {
-                "single": 1,
-                "multi_assign": 1,
-                "bundle": 0
-              },
-              "selected_bundle_order_count": 0,
-              "portfolio_seed": 0
-            }
-          }
-        },
-        {
-          "ts": "2026-04-23T08:26:24.549901+00:00",
-          "type": "benchmark.case_completed",
-          "payload": {
-            "benchmark_id": "demo-benchmark-manifest",
-            "case_id": "split-cluster#1",
-            "instance_id": "benchmark-case-2",
-            "source_path": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_2.json",
-            "expected_completed_orders": 2.604,
-            "total_cost": 16.8,
-            "elapsed_ms": 12,
-            "solver_name": "portfolio[cpsat]",
-            "status": "ok",
-            "weight": 1.3,
-            "stats": {
-              "strategy": "set_packing_cpsat",
-              "options_considered": 11,
-              "candidate_option_count": 11,
-              "candidate_option_breakdown": {
-                "single": 6,
-                "multi_assign": 3,
-                "bundle": 2
-              },
-              "selected_option_breakdown": {
-                "single": 2,
-                "multi_assign": 1,
-                "bundle": 0
-              },
-              "selected_bundle_order_count": 0,
-              "portfolio_seed": 0
-            }
-          }
-        },
-        {
-          "ts": "2026-04-23T08:26:24.579908+00:00",
-          "type": "benchmark.case_completed",
-          "payload": {
-            "benchmark_id": "demo-benchmark-manifest",
-            "case_id": "split-cluster#2",
-            "instance_id": "benchmark-case-2",
-            "source_path": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_2.json",
-            "expected_completed_orders": 2.604,
-            "total_cost": 16.8,
-            "elapsed_ms": 9,
-            "solver_name": "portfolio[cpsat]",
-            "status": "ok",
-            "weight": 1.3,
-            "stats": {
-              "strategy": "set_packing_cpsat",
-              "options_considered": 11,
-              "candidate_option_count": 11,
-              "candidate_option_breakdown": {
-                "single": 6,
-                "multi_assign": 3,
-                "bundle": 2
-              },
-              "selected_option_breakdown": {
-                "single": 2,
-                "multi_assign": 1,
-                "bundle": 0
-              },
-              "selected_bundle_order_count": 0,
-              "portfolio_seed": 0
-            }
-          }
-        },
-        {
-          "ts": "2026-04-23T08:26:24.598678+00:00",
-          "type": "benchmark.completed",
-          "payload": {
-            "benchmark_id": "demo-benchmark-manifest",
-            "case_count": 3,
-            "average_expected_completed_orders": 2.338666666666667,
-            "average_total_cost": 16.133333333333336,
-            "total_elapsed_ms": 48,
-            "total_weight": 3.5999999999999996
-          }
-        },
-        {
-          "ts": "2026-04-23T08:26:24.616437+00:00",
-          "type": "research.round_completed",
-          "payload": {
-            "experiment_id": "llm-exp-1",
-            "status": "keep",
-            "average_expected_completed_orders": 2.338666666666667,
-            "average_total_cost": 16.133333333333336,
-            "total_elapsed_ms": 48
-          }
-        },
-        {
-          "ts": "2026-04-23T08:26:24.635023+00:00",
-          "type": "research.incumbent_updated",
-          "payload": {
-            "experiment_id": "llm-exp-1",
-            "average_expected_completed_orders": 2.338666666666667,
-            "average_total_cost": 16.133333333333336
-          }
-        },
-        {
-          "ts": "2026-04-23T08:26:31.750566+00:00",
-          "type": "research.llm_reflection",
-          "payload": {
-            "round_index": 0,
-            "experiment_id": "llm-exp-1",
-            "summary": "Initial experiment established baseline with moderate bundle constraints and fast solve time.",
-            "keep_reason": "First experiment becomes incumbent by default.",
-            "risks": [
-              "Max bundle size 2 may limit cost savings from larger bundles",
-              "Low bundle pool size 6 may miss good combinations",
-              "Fast solve time suggests under-utilized search budget"
-            ],
-            "next_focus": [
-              "Test larger max_bundle_size (3-4)",
-              "Increase bundle_candidate_pool_size",
-              "Explore higher bundle_discount_factor values",
-              "Test longer LNS iterations with larger destroy fraction"
-            ],
-            "avoid_patterns": [
-              "Over-constraining bundle generation",
-              "Premature optimization without exploring parameter space",
-              "Ignoring solve time efficiency gains"
-            ]
-          }
-        },
-        {
-          "ts": "2026-04-23T08:26:37.915262+00:00",
-          "type": "research.fallback_proposal",
-          "payload": {
-            "round_index": 1,
-            "experiment_id": "exp-12",
-            "hypothesis": "Adjust top_k, bundle generation, and local search neighborhood for benchmark demo-benchmark-manifest with config {\"allow_llm_baseline\": false, \"bundle_acceptance_scale\": 0.97, \"bundle_candidate_pool_size\": 8, \"bundle_discount_factor\": 0.96, \"bundle_distance_threshold\": 2.8, \"cpsat_max_orders\": 120, \"generate_bundles_if_missing\": false, \"lns_destroy_fraction\": 0.25, \"lns_iterations\": 20, \"max_bundle_size\": 3, \"max_generated_bundles\": 48, \"time_budget_ms\": 10000, \"top_k_riders_per_order\": 3, \"use_cpsat\": false, \"use_lns\": true}.",
-            "solver_config": {
-              "time_budget_ms": 10000,
-              "top_k_riders_per_order": 3,
-              "use_cpsat": false,
-              "use_lns": true,
-              "cpsat_max_orders": 120,
-              "generate_bundles_if_missing": false,
-              "max_generated_bundles": 48,
-              "bundle_candidate_pool_size": 8,
-              "max_bundle_size": 3,
-              "bundle_distance_threshold": 2.8,
-              "bundle_discount_factor": 0.96,
-              "bundle_acceptance_scale": 0.97,
-              "lns_destroy_fraction": 0.25,
-              "lns_iterations": 20,
+              "bundle_acceptance_scale": 0.93,
+              "lns_destroy_fraction": 0.2,
+              "lns_iterations": 16,
               "allow_llm_baseline": false
             },
-            "notes": "fallback-proposer"
+            "notes": "llm-proposer"
           }
         }
       ]
     },
     {
-      "experiment_id": "exp-12",
-      "hypothesis": "Adjust top_k, bundle generation, and local search neighborhood for benchmark demo-benchmark-manifest with config {\"allow_llm_baseline\": false, \"bundle_acceptance_scale\": 0.97, \"bundle_candidate_pool_size\": 8, \"bundle_discount_factor\": 0.96, \"bundle_distance_threshold\": 2.8, \"cpsat_max_orders\": 120, \"generate_bundles_if_missing\": false, \"lns_destroy_fraction\": 0.25, \"lns_iterations\": 20, \"max_bundle_size\": 3, \"max_generated_bundles\": 48, \"time_budget_ms\": 10000, \"top_k_riders_per_order\": 3, \"use_cpsat\": false, \"use_lns\": true}.",
+      "experiment_id": "llm-exp-2",
+      "hypothesis": "Explore more aggressive bundle generation and rider assignment to address rider-shortage cases. Increase top-k riders to capture more assignment options and expand bundle candidate pool for better bundle exploration while maintaining CP-SAT optimality.",
       "events": [
         {
-          "ts": "2026-04-23T08:26:37.936049+00:00",
+          "ts": "2026-04-23T10:01:42.817593+00:00",
           "type": "research.round_started",
           "payload": {
             "round_index": 1,
-            "experiment_id": "exp-12",
-            "hypothesis": "Adjust top_k, bundle generation, and local search neighborhood for benchmark demo-benchmark-manifest with config {\"allow_llm_baseline\": false, \"bundle_acceptance_scale\": 0.97, \"bundle_candidate_pool_size\": 8, \"bundle_discount_factor\": 0.96, \"bundle_distance_threshold\": 2.8, \"cpsat_max_orders\": 120, \"generate_bundles_if_missing\": false, \"lns_destroy_fraction\": 0.25, \"lns_iterations\": 20, \"max_bundle_size\": 3, \"max_generated_bundles\": 48, \"time_budget_ms\": 10000, \"top_k_riders_per_order\": 3, \"use_cpsat\": false, \"use_lns\": true}.",
+            "experiment_id": "llm-exp-2",
+            "hypothesis": "Explore more aggressive bundle generation and rider assignment to address rider-shortage cases. Increase top-k riders to capture more assignment options and expand bundle candidate pool for better bundle exploration while maintaining CP-SAT optimality.",
             "solver_config": {
               "time_budget_ms": 10000,
               "top_k_riders_per_order": 3,
-              "use_cpsat": false,
+              "use_cpsat": true,
               "use_lns": true,
               "cpsat_max_orders": 120,
-              "generate_bundles_if_missing": false,
-              "max_generated_bundles": 48,
+              "generate_bundles_if_missing": true,
+              "max_generated_bundles": 64,
               "bundle_candidate_pool_size": 8,
               "max_bundle_size": 3,
-              "bundle_distance_threshold": 2.8,
-              "bundle_discount_factor": 0.96,
-              "bundle_acceptance_scale": 0.97,
-              "lns_destroy_fraction": 0.25,
-              "lns_iterations": 20,
+              "bundle_distance_threshold": 2.5,
+              "bundle_discount_factor": 0.92,
+              "bundle_acceptance_scale": 0.93,
+              "lns_destroy_fraction": 0.2,
+              "lns_iterations": 16,
               "allow_llm_baseline": false
             }
           }
         },
         {
-          "ts": "2026-04-23T08:26:37.956662+00:00",
+          "ts": "2026-04-23T10:01:42.893357+00:00",
           "type": "benchmark.case_completed",
           "payload": {
-            "benchmark_id": "demo-benchmark-manifest",
-            "case_id": "nearby-cluster",
-            "instance_id": "benchmark-case-1",
-            "source_path": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_1.json",
-            "expected_completed_orders": 1.62,
-            "total_cost": 14.6,
-            "elapsed_ms": 1,
-            "solver_name": "portfolio[greedy]",
+            "benchmark_id": "cloud-probe-benchmark",
+            "case_id": "dense-bundle-grid",
+            "instance_id": "cloud-dense-bundle-grid",
+            "source_path": "examples\\generated\\cloud_probe\\cloud-dense-bundle-grid.json",
+            "expected_completed_orders": 30.49542744,
+            "total_cost": 247.228,
+            "elapsed_ms": 58,
+            "solver_name": "portfolio[cpsat]",
+            "status": "ok",
+            "weight": 1.1,
+            "stats": {
+              "strategy": "set_packing_cpsat",
+              "options_considered": 315,
+              "candidate_option_count": 315,
+              "candidate_option_breakdown": {
+                "single": 126,
+                "multi_assign": 168,
+                "bundle": 21
+              },
+              "selected_option_breakdown": {
+                "single": 21,
+                "multi_assign": 10,
+                "bundle": 2
+              },
+              "selected_bundle_order_count": 4,
+              "portfolio_seed": 1
+            }
+          }
+        },
+        {
+          "ts": "2026-04-23T10:01:42.986260+00:00",
+          "type": "benchmark.case_completed",
+          "payload": {
+            "benchmark_id": "cloud-probe-benchmark",
+            "case_id": "rider-shortage",
+            "instance_id": "cloud-rider-shortage",
+            "source_path": "examples\\generated\\cloud_probe\\cloud-rider-shortage.json",
+            "expected_completed_orders": 15.8113,
+            "total_cost": 100.2464,
+            "elapsed_ms": 72,
+            "solver_name": "portfolio[cpsat]",
+            "status": "ok",
+            "weight": 1.4,
+            "stats": {
+              "strategy": "set_packing_cpsat",
+              "options_considered": 360,
+              "candidate_option_count": 360,
+              "candidate_option_breakdown": {
+                "single": 144,
+                "multi_assign": 192,
+                "bundle": 24
+              },
+              "selected_option_breakdown": {
+                "single": 13,
+                "multi_assign": 0,
+                "bundle": 3
+              },
+              "selected_bundle_order_count": 6,
+              "portfolio_seed": 1
+            }
+          }
+        },
+        {
+          "ts": "2026-04-23T10:01:43.062570+00:00",
+          "type": "benchmark.case_completed",
+          "payload": {
+            "benchmark_id": "cloud-probe-benchmark",
+            "case_id": "multi-assign-pressure#1",
+            "instance_id": "cloud-multi-assign-pressure",
+            "source_path": "examples\\generated\\cloud_probe\\cloud-multi-assign-pressure.json",
+            "expected_completed_orders": 28.400812935881,
+            "total_cost": 255.201,
+            "elapsed_ms": 53,
+            "solver_name": "portfolio[cpsat]",
             "status": "ok",
             "weight": 1.0,
             "stats": {
-              "strategy": "density_greedy",
-              "options_considered": 6,
-              "candidate_option_count": 6,
+              "strategy": "set_packing_cpsat",
+              "options_considered": 225,
+              "candidate_option_count": 225,
               "candidate_option_breakdown": {
-                "single": 4,
-                "multi_assign": 2,
-                "bundle": 0
+                "single": 90,
+                "multi_assign": 120,
+                "bundle": 15
               },
               "selected_option_breakdown": {
-                "single": 1,
-                "multi_assign": 1,
+                "single": 12,
+                "multi_assign": 18,
                 "bundle": 0
               },
               "selected_bundle_order_count": 0,
@@ -705,31 +1005,31 @@
           }
         },
         {
-          "ts": "2026-04-23T08:26:37.974721+00:00",
+          "ts": "2026-04-23T10:01:43.122815+00:00",
           "type": "benchmark.case_completed",
           "payload": {
-            "benchmark_id": "demo-benchmark-manifest",
-            "case_id": "split-cluster#1",
-            "instance_id": "benchmark-case-2",
-            "source_path": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_2.json",
-            "expected_completed_orders": 1.8378,
-            "total_cost": 18.9,
-            "elapsed_ms": 1,
-            "solver_name": "portfolio[greedy]",
+            "benchmark_id": "cloud-probe-benchmark",
+            "case_id": "multi-assign-pressure#2",
+            "instance_id": "cloud-multi-assign-pressure",
+            "source_path": "examples\\generated\\cloud_probe\\cloud-multi-assign-pressure.json",
+            "expected_completed_orders": 28.400812935881,
+            "total_cost": 255.201,
+            "elapsed_ms": 38,
+            "solver_name": "portfolio[cpsat]",
             "status": "ok",
-            "weight": 1.3,
+            "weight": 1.0,
             "stats": {
-              "strategy": "density_greedy",
-              "options_considered": 9,
-              "candidate_option_count": 9,
+              "strategy": "set_packing_cpsat",
+              "options_considered": 225,
+              "candidate_option_count": 225,
               "candidate_option_breakdown": {
-                "single": 6,
-                "multi_assign": 3,
-                "bundle": 0
+                "single": 90,
+                "multi_assign": 120,
+                "bundle": 15
               },
               "selected_option_breakdown": {
-                "single": 0,
-                "multi_assign": 2,
+                "single": 12,
+                "multi_assign": 18,
                 "bundle": 0
               },
               "selected_bundle_order_count": 0,
@@ -738,86 +1038,92 @@
           }
         },
         {
-          "ts": "2026-04-23T08:26:37.994937+00:00",
+          "ts": "2026-04-23T10:01:43.201529+00:00",
           "type": "benchmark.case_completed",
           "payload": {
-            "benchmark_id": "demo-benchmark-manifest",
-            "case_id": "split-cluster#2",
-            "instance_id": "benchmark-case-2",
-            "source_path": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_2.json",
-            "expected_completed_orders": 1.8378,
-            "total_cost": 18.9,
-            "elapsed_ms": 1,
-            "solver_name": "portfolio[greedy]",
+            "benchmark_id": "cloud-probe-benchmark",
+            "case_id": "generated-bundle-only",
+            "instance_id": "cloud-generated-bundle-only",
+            "source_path": "examples\\generated\\cloud_probe\\cloud-generated-bundle-only.json",
+            "expected_completed_orders": 21.72873535172391,
+            "total_cost": 141.69310709403612,
+            "elapsed_ms": 60,
+            "solver_name": "portfolio[cpsat]",
             "status": "ok",
-            "weight": 1.3,
+            "weight": 1.2,
             "stats": {
-              "strategy": "density_greedy",
-              "options_considered": 9,
-              "candidate_option_count": 9,
+              "strategy": "set_packing_cpsat",
+              "options_considered": 316,
+              "candidate_option_count": 316,
               "candidate_option_breakdown": {
-                "single": 6,
-                "multi_assign": 3,
-                "bundle": 0
+                "single": 108,
+                "multi_assign": 144,
+                "bundle": 64
               },
               "selected_option_breakdown": {
-                "single": 0,
+                "single": 18,
                 "multi_assign": 2,
-                "bundle": 0
+                "bundle": 2
               },
-              "selected_bundle_order_count": 0,
+              "selected_bundle_order_count": 6,
               "portfolio_seed": 1
             }
           }
         },
         {
-          "ts": "2026-04-23T08:26:38.015492+00:00",
+          "ts": "2026-04-23T10:01:43.222500+00:00",
           "type": "benchmark.completed",
           "payload": {
-            "benchmark_id": "demo-benchmark-manifest",
-            "case_count": 3,
-            "average_expected_completed_orders": 1.7773000000000003,
-            "average_total_cost": 17.70555555555556,
-            "total_elapsed_ms": 3,
-            "total_weight": 3.5999999999999996
+            "benchmark_id": "cloud-probe-benchmark",
+            "case_count": 5,
+            "average_expected_completed_orders": 24.30822780312819,
+            "average_total_cost": 191.70692780927075,
+            "total_elapsed_ms": 281,
+            "total_weight": 5.7
           }
         },
         {
-          "ts": "2026-04-23T08:26:38.037686+00:00",
+          "ts": "2026-04-23T10:01:43.241391+00:00",
           "type": "research.round_completed",
           "payload": {
-            "experiment_id": "exp-12",
-            "status": "discard",
-            "average_expected_completed_orders": 1.7773000000000003,
-            "average_total_cost": 17.70555555555556,
-            "total_elapsed_ms": 3
+            "experiment_id": "llm-exp-2",
+            "status": "keep",
+            "average_expected_completed_orders": 24.30822780312819,
+            "average_total_cost": 191.70692780927075,
+            "total_elapsed_ms": 281
           }
         },
         {
-          "ts": "2026-04-23T08:26:45.203980+00:00",
+          "ts": "2026-04-23T10:01:43.260526+00:00",
+          "type": "research.incumbent_updated",
+          "payload": {
+            "experiment_id": "llm-exp-2",
+            "average_expected_completed_orders": 24.30822780312819,
+            "average_total_cost": 191.70692780927075
+          }
+        },
+        {
+          "ts": "2026-04-23T10:01:50.597647+00:00",
           "type": "research.llm_reflection",
           "payload": {
             "round_index": 1,
-            "experiment_id": "exp-12",
-            "summary": "Experiment exp-12 regressed significantly on completed orders and cost compared to the incumbent, indicating the parameter adjustments were detrimental.",
-            "keep_reason": "N/A - this experiment was discarded due to performance regression.",
+            "experiment_id": "llm-exp-2",
+            "summary": "Experiment llm-exp-2 increased completed orders by 2.5% but at a 14% cost increase, suggesting aggressive bundling found more assignments but with less efficiency.",
+            "keep_reason": "The significant increase in completed orders justifies keeping this configuration for further analysis.",
             "risks": [
-              "Bundle pool size of 8 may be too restrictive for effective LNS",
-              "Low bundle discount factor (0.96) reduces bundling incentive",
-              "High bundle acceptance scale (0.97) may reject beneficial bundles",
-              "LNS destroy fraction of 0.25 may be too aggressive for small problems"
+              "Cost per completed order increased substantially",
+              "Bundle generation parameters may be too aggressive on distance/discount",
+              "Higher computational time suggests approaching solver limits"
             ],
             "next_focus": [
-              "Increase bundle candidate pool size to improve LNS diversity",
-              "Reduce bundle acceptance scale to encourage more bundling",
-              "Test lower LNS destroy fraction for more gradual improvement",
-              "Re-enable bundle generation to expand solution space"
+              "Optimize bundle distance and discount factors to reduce cost inflation",
+              "Test intermediate bundle pool sizes between current and previous",
+              "Monitor solver time as complexity increases"
             ],
             "avoid_patterns": [
-              "Restricting bundle pool below 10-12 candidates",
-              "Using high acceptance thresholds with low discount factors",
-              "Aggressive LNS destruction without sufficient iteration budget",
-              "Disabling bundle generation entirely"
+              "Sacrificing cost efficiency for marginal order completion gains",
+              "Expanding bundle parameters without cost controls",
+              "Ignoring computational time trends"
             ]
           }
         }
@@ -827,31 +1133,158 @@
   "roundInsights": [
     {
       "experimentId": "llm-exp-1",
-      "hypothesis": "{'top_k_riders_per_order': 2, 'use_cpsat': True, 'generate_bundles_if_missing': True, 'bundle_candidate_pool_size': 6, 'max_bundle_size': 2, 'bundle_distance_threshold': 2.2, 'bundle_discount_factor': 0.92, 'bundle_acceptance_scale': 0.93, 'max_generated_bundles': 24, 'lns_destroy_fraction': 0.2, 'lns_iterations': 12}",
+      "hypothesis": "Start with balanced exploration: CP-SAT for optimality, moderate top-k and bundle generation to handle rider-shortage cases, and LNS for improvement within time budget.",
       "status": "keep",
       "proposalType": "llm",
-      "averageExpectedCompletedOrders": 2.338666666666667,
-      "averageTotalCost": 16.133333333333336,
-      "totalElapsedMs": 48,
-      "averageCandidateOptionCount": 9.666666666666666,
-      "averageBundleOptionCount": 1.6666666666666667,
-      "reflectionSummary": "Initial experiment established baseline with moderate bundle constraints and fast solve time.",
-      "keepReason": "First experiment becomes incumbent by default.",
+      "averageExpectedCompletedOrders": 23.708272907029595,
+      "averageTotalCost": 167.93353658120057,
+      "totalElapsedMs": 180,
+      "averageCandidateOptionCount": 133.0,
+      "averageBundleOptionCount": 21.4,
+      "reflectionSummary": "Initial baseline achieved 23.7 completed orders with moderate cost, establishing a solid foundation for rider-shortage scenarios.",
+      "keepReason": "No incumbent exists, so this result serves as the starting benchmark.",
       "risks": [
-        "Max bundle size 2 may limit cost savings from larger bundles",
-        "Low bundle pool size 6 may miss good combinations",
-        "Fast solve time suggests under-utilized search budget"
+        "Top-k=2 may miss viable rider assignments in dense areas",
+        "Bundle pool size of 8 may limit exploration of bundle combinations",
+        "LNS destroy fraction of 0.2 may be too conservative for significant improvements"
       ],
       "nextFocus": [
-        "Test larger max_bundle_size (3-4)",
-        "Increase bundle_candidate_pool_size",
-        "Explore higher bundle_discount_factor values",
-        "Test longer LNS iterations with larger destroy fraction"
+        "Test higher top-k values to capture more rider options",
+        "Increase bundle pool size to explore more bundle combinations",
+        "Experiment with more aggressive LNS destruction rates",
+        "Validate bundle distance threshold of 2.5 against spatial distribution"
       ],
       "avoidPatterns": [
-        "Over-constraining bundle generation",
-        "Premature optimization without exploring parameter space",
-        "Ignoring solve time efficiency gains"
+        "Over-relying on CP-SAT for large instances without LNS refinement",
+        "Keeping bundle generation too restrictive early in search",
+        "Using identical parameters across different problem densities"
+      ],
+      "solverConfig": {
+        "time_budget_ms": 10000,
+        "top_k_riders_per_order": 2,
+        "use_cpsat": true,
+        "use_lns": true,
+        "cpsat_max_orders": 120,
+        "generate_bundles_if_missing": true,
+        "max_generated_bundles": 32,
+        "bundle_candidate_pool_size": 8,
+        "max_bundle_size": 3,
+        "bundle_distance_threshold": 2.5,
+        "bundle_discount_factor": 0.92,
+        "bundle_acceptance_scale": 0.93,
+        "lns_destroy_fraction": 0.2,
+        "lns_iterations": 16,
+        "allow_llm_baseline": false
+      },
+      "caseMetrics": [
+        {
+          "caseId": "dense-bundle-grid",
+          "instanceId": "cloud-dense-bundle-grid",
+          "expectedCompletedOrders": 28.62671768,
+          "totalCost": 203.0373,
+          "elapsedMs": 45,
+          "solverName": "portfolio[cpsat]",
+          "status": "ok",
+          "weight": 1.1,
+          "candidateOptionCount": 147,
+          "candidateOptionBreakdown": {
+            "single": 84,
+            "multi_assign": 42,
+            "bundle": 21
+          }
+        },
+        {
+          "caseId": "rider-shortage",
+          "instanceId": "cloud-rider-shortage",
+          "expectedCompletedOrders": 15.8113,
+          "totalCost": 100.2464,
+          "elapsedMs": 42,
+          "solverName": "portfolio[cpsat]",
+          "status": "ok",
+          "weight": 1.4,
+          "candidateOptionCount": 168,
+          "candidateOptionBreakdown": {
+            "single": 96,
+            "multi_assign": 48,
+            "bundle": 24
+          }
+        },
+        {
+          "caseId": "multi-assign-pressure#1",
+          "instanceId": "cloud-multi-assign-pressure",
+          "expectedCompletedOrders": 27.72923185,
+          "totalCost": 212.1428,
+          "elapsedMs": 24,
+          "solverName": "portfolio[cpsat]",
+          "status": "ok",
+          "weight": 1.0,
+          "candidateOptionCount": 105,
+          "candidateOptionBreakdown": {
+            "single": 60,
+            "multi_assign": 30,
+            "bundle": 15
+          }
+        },
+        {
+          "caseId": "multi-assign-pressure#2",
+          "instanceId": "cloud-multi-assign-pressure",
+          "expectedCompletedOrders": 27.72923185,
+          "totalCost": 212.1428,
+          "elapsedMs": 26,
+          "solverName": "portfolio[cpsat]",
+          "status": "ok",
+          "weight": 1.0,
+          "candidateOptionCount": 105,
+          "candidateOptionBreakdown": {
+            "single": 60,
+            "multi_assign": 30,
+            "bundle": 15
+          }
+        },
+        {
+          "caseId": "generated-bundle-only",
+          "instanceId": "cloud-generated-bundle-only",
+          "expectedCompletedOrders": 21.71123535172391,
+          "totalCost": 141.04130709403614,
+          "elapsedMs": 43,
+          "solverName": "portfolio[cpsat]",
+          "status": "ok",
+          "weight": 1.2,
+          "candidateOptionCount": 140,
+          "candidateOptionBreakdown": {
+            "single": 72,
+            "multi_assign": 36,
+            "bundle": 32
+          }
+        }
+      ]
+    },
+    {
+      "experimentId": "llm-exp-2",
+      "hypothesis": "Explore more aggressive bundle generation and rider assignment to address rider-shortage cases. Increase top-k riders to capture more assignment options and expand bundle candidate pool for better bundle exploration while maintaining CP-SAT optimality.",
+      "status": "keep",
+      "proposalType": "llm",
+      "averageExpectedCompletedOrders": 24.30822780312819,
+      "averageTotalCost": 191.70692780927075,
+      "totalElapsedMs": 281,
+      "averageCandidateOptionCount": 288.2,
+      "averageBundleOptionCount": 27.8,
+      "reflectionSummary": "Experiment llm-exp-2 increased completed orders by 2.5% but at a 14% cost increase, suggesting aggressive bundling found more assignments but with less efficiency.",
+      "keepReason": "The significant increase in completed orders justifies keeping this configuration for further analysis.",
+      "risks": [
+        "Cost per completed order increased substantially",
+        "Bundle generation parameters may be too aggressive on distance/discount",
+        "Higher computational time suggests approaching solver limits"
+      ],
+      "nextFocus": [
+        "Optimize bundle distance and discount factors to reduce cost inflation",
+        "Test intermediate bundle pool sizes between current and previous",
+        "Monitor solver time as complexity increases"
+      ],
+      "avoidPatterns": [
+        "Sacrificing cost efficiency for marginal order completion gains",
+        "Expanding bundle parameters without cost controls",
+        "Ignoring computational time trends"
       ],
       "solverConfig": {
         "time_budget_ms": 10000,
@@ -861,160 +1294,94 @@
         "cpsat_max_orders": 120,
         "generate_bundles_if_missing": true,
         "max_generated_bundles": 64,
-        "bundle_candidate_pool_size": 6,
+        "bundle_candidate_pool_size": 8,
         "max_bundle_size": 3,
         "bundle_distance_threshold": 2.5,
         "bundle_discount_factor": 0.92,
-        "bundle_acceptance_scale": 0.95,
-        "lns_destroy_fraction": 0.25,
-        "lns_iterations": 24,
+        "bundle_acceptance_scale": 0.93,
+        "lns_destroy_fraction": 0.2,
+        "lns_iterations": 16,
         "allow_llm_baseline": false
       },
       "caseMetrics": [
         {
-          "caseId": "nearby-cluster",
-          "instanceId": "benchmark-case-1",
-          "expectedCompletedOrders": 1.6488,
-          "totalCost": 14.4,
-          "elapsedMs": 27,
+          "caseId": "dense-bundle-grid",
+          "instanceId": "cloud-dense-bundle-grid",
+          "expectedCompletedOrders": 30.49542744,
+          "totalCost": 247.228,
+          "elapsedMs": 58,
+          "solverName": "portfolio[cpsat]",
+          "status": "ok",
+          "weight": 1.1,
+          "candidateOptionCount": 315,
+          "candidateOptionBreakdown": {
+            "single": 126,
+            "multi_assign": 168,
+            "bundle": 21
+          }
+        },
+        {
+          "caseId": "rider-shortage",
+          "instanceId": "cloud-rider-shortage",
+          "expectedCompletedOrders": 15.8113,
+          "totalCost": 100.2464,
+          "elapsedMs": 72,
+          "solverName": "portfolio[cpsat]",
+          "status": "ok",
+          "weight": 1.4,
+          "candidateOptionCount": 360,
+          "candidateOptionBreakdown": {
+            "single": 144,
+            "multi_assign": 192,
+            "bundle": 24
+          }
+        },
+        {
+          "caseId": "multi-assign-pressure#1",
+          "instanceId": "cloud-multi-assign-pressure",
+          "expectedCompletedOrders": 28.400812935881,
+          "totalCost": 255.201,
+          "elapsedMs": 53,
           "solverName": "portfolio[cpsat]",
           "status": "ok",
           "weight": 1.0,
-          "candidateOptionCount": 7,
+          "candidateOptionCount": 225,
           "candidateOptionBreakdown": {
-            "single": 4,
-            "multi_assign": 2,
-            "bundle": 1
+            "single": 90,
+            "multi_assign": 120,
+            "bundle": 15
           }
         },
         {
-          "caseId": "split-cluster#1",
-          "instanceId": "benchmark-case-2",
-          "expectedCompletedOrders": 2.604,
-          "totalCost": 16.8,
-          "elapsedMs": 12,
+          "caseId": "multi-assign-pressure#2",
+          "instanceId": "cloud-multi-assign-pressure",
+          "expectedCompletedOrders": 28.400812935881,
+          "totalCost": 255.201,
+          "elapsedMs": 38,
           "solverName": "portfolio[cpsat]",
-          "status": "ok",
-          "weight": 1.3,
-          "candidateOptionCount": 11,
-          "candidateOptionBreakdown": {
-            "single": 6,
-            "multi_assign": 3,
-            "bundle": 2
-          }
-        },
-        {
-          "caseId": "split-cluster#2",
-          "instanceId": "benchmark-case-2",
-          "expectedCompletedOrders": 2.604,
-          "totalCost": 16.8,
-          "elapsedMs": 9,
-          "solverName": "portfolio[cpsat]",
-          "status": "ok",
-          "weight": 1.3,
-          "candidateOptionCount": 11,
-          "candidateOptionBreakdown": {
-            "single": 6,
-            "multi_assign": 3,
-            "bundle": 2
-          }
-        }
-      ]
-    },
-    {
-      "experimentId": "exp-12",
-      "hypothesis": "Adjust top_k, bundle generation, and local search neighborhood for benchmark demo-benchmark-manifest with config {\"allow_llm_baseline\": false, \"bundle_acceptance_scale\": 0.97, \"bundle_candidate_pool_size\": 8, \"bundle_discount_factor\": 0.96, \"bundle_distance_threshold\": 2.8, \"cpsat_max_orders\": 120, \"generate_bundles_if_missing\": false, \"lns_destroy_fraction\": 0.25, \"lns_iterations\": 20, \"max_bundle_size\": 3, \"max_generated_bundles\": 48, \"time_budget_ms\": 10000, \"top_k_riders_per_order\": 3, \"use_cpsat\": false, \"use_lns\": true}.",
-      "status": "discard",
-      "proposalType": "fallback",
-      "averageExpectedCompletedOrders": 1.7773000000000003,
-      "averageTotalCost": 17.70555555555556,
-      "totalElapsedMs": 3,
-      "averageCandidateOptionCount": 8.0,
-      "averageBundleOptionCount": 0.0,
-      "reflectionSummary": "Experiment exp-12 regressed significantly on completed orders and cost compared to the incumbent, indicating the parameter adjustments were detrimental.",
-      "keepReason": "N/A - this experiment was discarded due to performance regression.",
-      "risks": [
-        "Bundle pool size of 8 may be too restrictive for effective LNS",
-        "Low bundle discount factor (0.96) reduces bundling incentive",
-        "High bundle acceptance scale (0.97) may reject beneficial bundles",
-        "LNS destroy fraction of 0.25 may be too aggressive for small problems"
-      ],
-      "nextFocus": [
-        "Increase bundle candidate pool size to improve LNS diversity",
-        "Reduce bundle acceptance scale to encourage more bundling",
-        "Test lower LNS destroy fraction for more gradual improvement",
-        "Re-enable bundle generation to expand solution space"
-      ],
-      "avoidPatterns": [
-        "Restricting bundle pool below 10-12 candidates",
-        "Using high acceptance thresholds with low discount factors",
-        "Aggressive LNS destruction without sufficient iteration budget",
-        "Disabling bundle generation entirely"
-      ],
-      "solverConfig": {
-        "time_budget_ms": 10000,
-        "top_k_riders_per_order": 3,
-        "use_cpsat": false,
-        "use_lns": true,
-        "cpsat_max_orders": 120,
-        "generate_bundles_if_missing": false,
-        "max_generated_bundles": 48,
-        "bundle_candidate_pool_size": 8,
-        "max_bundle_size": 3,
-        "bundle_distance_threshold": 2.8,
-        "bundle_discount_factor": 0.96,
-        "bundle_acceptance_scale": 0.97,
-        "lns_destroy_fraction": 0.25,
-        "lns_iterations": 20,
-        "allow_llm_baseline": false
-      },
-      "caseMetrics": [
-        {
-          "caseId": "nearby-cluster",
-          "instanceId": "benchmark-case-1",
-          "expectedCompletedOrders": 1.62,
-          "totalCost": 14.6,
-          "elapsedMs": 1,
-          "solverName": "portfolio[greedy]",
           "status": "ok",
           "weight": 1.0,
-          "candidateOptionCount": 6,
+          "candidateOptionCount": 225,
           "candidateOptionBreakdown": {
-            "single": 4,
-            "multi_assign": 2,
-            "bundle": 0
+            "single": 90,
+            "multi_assign": 120,
+            "bundle": 15
           }
         },
         {
-          "caseId": "split-cluster#1",
-          "instanceId": "benchmark-case-2",
-          "expectedCompletedOrders": 1.8378,
-          "totalCost": 18.9,
-          "elapsedMs": 1,
-          "solverName": "portfolio[greedy]",
+          "caseId": "generated-bundle-only",
+          "instanceId": "cloud-generated-bundle-only",
+          "expectedCompletedOrders": 21.72873535172391,
+          "totalCost": 141.69310709403612,
+          "elapsedMs": 60,
+          "solverName": "portfolio[cpsat]",
           "status": "ok",
-          "weight": 1.3,
-          "candidateOptionCount": 9,
+          "weight": 1.2,
+          "candidateOptionCount": 316,
           "candidateOptionBreakdown": {
-            "single": 6,
-            "multi_assign": 3,
-            "bundle": 0
-          }
-        },
-        {
-          "caseId": "split-cluster#2",
-          "instanceId": "benchmark-case-2",
-          "expectedCompletedOrders": 1.8378,
-          "totalCost": 18.9,
-          "elapsedMs": 1,
-          "solverName": "portfolio[greedy]",
-          "status": "ok",
-          "weight": 1.3,
-          "candidateOptionCount": 9,
-          "candidateOptionBreakdown": {
-            "single": 6,
-            "multi_assign": 3,
-            "bundle": 0
+            "single": 108,
+            "multi_assign": 144,
+            "bundle": 64
           }
         }
       ]
@@ -1022,85 +1389,117 @@
   ],
   "chartPoints": [
     {
-      "ts": "2026-04-23T08:26:24.616437+00:00",
-      "expectedCompletedOrders": 2.338666666666667,
-      "totalCost": 16.133333333333336,
+      "ts": "2026-04-23T10:01:29.090753+00:00",
+      "expectedCompletedOrders": 23.708272907029595,
+      "totalCost": 167.93353658120057,
       "type": "research.round_completed"
     },
     {
-      "ts": "2026-04-23T08:26:24.635023+00:00",
-      "expectedCompletedOrders": 2.338666666666667,
-      "totalCost": 16.133333333333336,
+      "ts": "2026-04-23T10:01:29.109987+00:00",
+      "expectedCompletedOrders": 23.708272907029595,
+      "totalCost": 167.93353658120057,
       "type": "research.incumbent_updated"
     },
     {
-      "ts": "2026-04-23T08:26:38.037686+00:00",
-      "expectedCompletedOrders": 1.7773000000000003,
-      "totalCost": 17.70555555555556,
+      "ts": "2026-04-23T10:01:43.241391+00:00",
+      "expectedCompletedOrders": 24.30822780312819,
+      "totalCost": 191.70692780927075,
       "type": "research.round_completed"
+    },
+    {
+      "ts": "2026-04-23T10:01:43.260526+00:00",
+      "expectedCompletedOrders": 24.30822780312819,
+      "totalCost": 191.70692780927075,
+      "type": "research.incumbent_updated"
     }
   ],
   "caseLeaderboard": [
     {
-      "caseId": "nearby-cluster",
-      "instanceId": "benchmark-case-1",
-      "sourcePath": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_1.json",
+      "caseId": "rider-shortage",
+      "instanceId": "cloud-rider-shortage",
+      "sourcePath": "examples\\generated\\cloud_probe\\cloud-rider-shortage.json",
       "runs": 2,
-      "averageExpectedCompletedOrders": 1.6344,
-      "averageTotalCost": 14.5,
-      "averageElapsedMs": 14.0,
-      "averageCandidateOptionCount": 6.5,
-      "averageBundleOptionCount": 0.5,
-      "lastSolverName": "portfolio[greedy]",
+      "averageExpectedCompletedOrders": 15.8113,
+      "averageTotalCost": 100.2464,
+      "averageElapsedMs": 57.0,
+      "averageCandidateOptionCount": 264.0,
+      "averageBundleOptionCount": 24.0,
+      "lastSolverName": "portfolio[cpsat]",
       "lastStatus": "ok"
     },
     {
-      "caseId": "split-cluster#1",
-      "instanceId": "benchmark-case-2",
-      "sourcePath": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_2.json",
+      "caseId": "generated-bundle-only",
+      "instanceId": "cloud-generated-bundle-only",
+      "sourcePath": "examples\\generated\\cloud_probe\\cloud-generated-bundle-only.json",
       "runs": 2,
-      "averageExpectedCompletedOrders": 2.2209000000000003,
-      "averageTotalCost": 17.85,
-      "averageElapsedMs": 6.5,
-      "averageCandidateOptionCount": 10.0,
-      "averageBundleOptionCount": 1.0,
-      "lastSolverName": "portfolio[greedy]",
+      "averageExpectedCompletedOrders": 21.71998535172391,
+      "averageTotalCost": 141.36720709403613,
+      "averageElapsedMs": 51.5,
+      "averageCandidateOptionCount": 228.0,
+      "averageBundleOptionCount": 48.0,
+      "lastSolverName": "portfolio[cpsat]",
       "lastStatus": "ok"
     },
     {
-      "caseId": "split-cluster#2",
-      "instanceId": "benchmark-case-2",
-      "sourcePath": "D:\\强强\\美图 hackthon\\examples\\benchmarks\\benchmark_case_2.json",
+      "caseId": "multi-assign-pressure#1",
+      "instanceId": "cloud-multi-assign-pressure",
+      "sourcePath": "examples\\generated\\cloud_probe\\cloud-multi-assign-pressure.json",
       "runs": 2,
-      "averageExpectedCompletedOrders": 2.2209000000000003,
-      "averageTotalCost": 17.85,
-      "averageElapsedMs": 5.0,
-      "averageCandidateOptionCount": 10.0,
-      "averageBundleOptionCount": 1.0,
-      "lastSolverName": "portfolio[greedy]",
+      "averageExpectedCompletedOrders": 28.0650223929405,
+      "averageTotalCost": 233.6719,
+      "averageElapsedMs": 38.5,
+      "averageCandidateOptionCount": 165.0,
+      "averageBundleOptionCount": 15.0,
+      "lastSolverName": "portfolio[cpsat]",
+      "lastStatus": "ok"
+    },
+    {
+      "caseId": "multi-assign-pressure#2",
+      "instanceId": "cloud-multi-assign-pressure",
+      "sourcePath": "examples\\generated\\cloud_probe\\cloud-multi-assign-pressure.json",
+      "runs": 2,
+      "averageExpectedCompletedOrders": 28.0650223929405,
+      "averageTotalCost": 233.6719,
+      "averageElapsedMs": 32.0,
+      "averageCandidateOptionCount": 165.0,
+      "averageBundleOptionCount": 15.0,
+      "lastSolverName": "portfolio[cpsat]",
+      "lastStatus": "ok"
+    },
+    {
+      "caseId": "dense-bundle-grid",
+      "instanceId": "cloud-dense-bundle-grid",
+      "sourcePath": "examples\\generated\\cloud_probe\\cloud-dense-bundle-grid.json",
+      "runs": 2,
+      "averageExpectedCompletedOrders": 29.56107256,
+      "averageTotalCost": 225.13265,
+      "averageElapsedMs": 51.5,
+      "averageCandidateOptionCount": 231.0,
+      "averageBundleOptionCount": 21.0,
+      "lastSolverName": "portfolio[cpsat]",
       "lastStatus": "ok"
     }
   ],
   "agent": {
     "provider": "deepseek-v3-1-terminus@ark.cn-beijing.volces.com",
     "llmEnabled": true,
-    "fallbackAllowed": false,
-    "benchmarkId": "demo-benchmark-manifest",
-    "sessionStartedAt": "2026-04-23T08:25:29.673279+00:00",
+    "fallbackAllowed": true,
+    "benchmarkId": "cloud-probe-benchmark",
+    "sessionStartedAt": "2026-04-23T10:01:23.285223+00:00",
     "proposalBreakdown": {
-      "llm": 1,
-      "fallback": 1
+      "llm": 2,
+      "fallback": 0
     }
   },
   "summary": {
-    "benchmarkId": "demo-benchmark-manifest",
+    "benchmarkId": "cloud-probe-benchmark",
     "roundCount": 2,
-    "eventCount": 18,
-    "keepCount": 1,
-    "discardCount": 1,
+    "eventCount": 23,
+    "keepCount": 2,
+    "discardCount": 0,
     "failureCount": 0,
-    "latestIncumbentExperimentId": "llm-exp-1",
-    "bestExpectedCompletedOrders": 2.338666666666667,
-    "bestTotalCost": 16.133333333333336
+    "latestIncumbentExperimentId": "llm-exp-2",
+    "bestExpectedCompletedOrders": 24.30822780312819,
+    "bestTotalCost": 191.70692780927075
   }
 }
