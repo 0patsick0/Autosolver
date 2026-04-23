@@ -75,6 +75,7 @@ interface PlaybackControlsProps {
   totalBeats: number;
   visibleBeats: number;
   isPlaying: boolean;
+  isFinished: boolean;
   speedMs: number;
   onStartPlayback: () => void;
   onTogglePlayback: () => void;
@@ -90,6 +91,7 @@ interface SessionViewerProps {
   totalBeats: number;
   visibleBeats: number;
   isPlaybackMode: boolean;
+  isPlaying: boolean;
   onOpenDetails: (beat: StoryBeat) => void;
 }
 
@@ -564,6 +566,7 @@ function PlaybackControls({
   totalBeats,
   visibleBeats,
   isPlaying,
+  isFinished,
   speedMs,
   onStartPlayback,
   onTogglePlayback,
@@ -589,7 +592,7 @@ function PlaybackControls({
         <div className="progress-meta">
           <span className="meta-chip">总步骤 {formatInteger(totalBeats)}</span>
           <span className="meta-chip">已展示 {formatInteger(shownCount)}</span>
-          <span className="meta-chip">{isPlaying ? "正在播放" : visibleBeats > 0 ? "已暂停" : "完整视图"}</span>
+          <span className="meta-chip">{isPlaying ? "正在播放" : isFinished ? "播放完成" : visibleBeats > 0 ? "已暂停" : "完整视图"}</span>
         </div>
       </div>
       <div className="playback-actions">
@@ -757,6 +760,7 @@ function SessionViewer({
   totalBeats,
   visibleBeats,
   isPlaybackMode,
+  isPlaying,
   onOpenDetails,
 }: SessionViewerProps) {
   useEffect(() => {
@@ -841,7 +845,7 @@ function SessionViewer({
               <SessionBubble
                 key={beat.id}
                 beat={beat}
-                isActive={Boolean(isPlaybackMode && currentBeat?.id === beat.id)}
+                isActive={Boolean(isPlaying && currentBeat?.id === beat.id)}
                 onOpenDetails={onOpenDetails}
               />
             ))
@@ -1066,11 +1070,13 @@ function App() {
   const agent: ReplayAgentSummary | undefined = data?.agent;
   const storyBeats = buildStoryBeats(events);
   const totalBeats = storyBeats.length;
-  const isPlaybackMode = visibleBeatCount > 0;
-  const shownBeats = isPlaybackMode ? storyBeats.slice(0, visibleBeatCount) : storyBeats;
+  const isPlaybackFinished = totalBeats > 0 && visibleBeatCount >= totalBeats && !isPlaying;
+  const isPartialPlayback = visibleBeatCount > 0 && visibleBeatCount < totalBeats;
+  const isPlaybackMode = isPartialPlayback;
+  const shownBeats = isPartialPlayback ? storyBeats.slice(0, visibleBeatCount) : storyBeats;
   const completedRoundCount = shownBeats.filter((beat) => beat.type === EVENT_TYPES.RESEARCH_ROUND_COMPLETED).length;
-  const shownRounds = isPlaybackMode ? roundInsights.slice(0, completedRoundCount) : roundInsights;
-  const currentBeat = shownBeats.at(-1) ?? null;
+  const shownRounds = isPartialPlayback ? roundInsights.slice(0, completedRoundCount) : roundInsights;
+  const currentBeat = isPartialPlayback ? shownBeats.at(-1) ?? null : null;
   const visibleKeepCount = shownRounds.filter((round) => round.status === "keep").length;
   const visibleDiscardCount = shownRounds.filter((round) => round.status === "discard").length;
   const visibleFailureCount = shownRounds.filter((round) => round.status === "crash").length;
@@ -1238,6 +1244,7 @@ function App() {
         totalBeats={totalBeats}
         visibleBeats={visibleBeatCount}
         isPlaying={isPlaying}
+        isFinished={isPlaybackFinished}
         speedMs={playbackSpeedMs}
         onStartPlayback={handleStartPlayback}
         onTogglePlayback={handleTogglePlayback}
@@ -1259,6 +1266,7 @@ function App() {
         totalBeats={totalBeats}
         visibleBeats={visibleBeatCount}
         isPlaybackMode={isPlaybackMode}
+        isPlaying={isPlaying}
         onOpenDetails={handleOpenDetails}
       />
 
