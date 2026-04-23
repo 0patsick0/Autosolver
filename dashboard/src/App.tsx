@@ -11,6 +11,11 @@ import {
 } from "./types";
 import "./styles.css";
 
+const LIVE_REPLAY_SOURCE_LABEL = "Bundled replay-data.json";
+const DEMO_REPLAY_SOURCE_LABEL = "Bundled demo-replay.json";
+const LIVE_REPLAY_FILE = "replay-data.json";
+const DEMO_REPLAY_FILE = "demo-replay.json";
+
 interface MetricCardProps {
   eyebrow: string;
   value: string;
@@ -94,7 +99,20 @@ function summarizeConfig(config: Record<string, unknown> | null): string[] {
 }
 
 function isBundledReplaySource(sourceLabel: string): boolean {
-  return sourceLabel === "Bundled replay-data.json";
+  return sourceLabel === LIVE_REPLAY_SOURCE_LABEL;
+}
+
+async function loadReplayPayload(filename: string): Promise<ReplayData> {
+  const replayUrl = `${import.meta.env.BASE_URL}${filename}?ts=${Date.now()}`;
+  const response = await fetch(replayUrl, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Failed to load ${filename}: ${response.status} ${response.statusText}`);
+  }
+  const payload: unknown = await response.json();
+  if (!isReplayData(payload)) {
+    throw new Error(`${filename} does not match the expected replay shape.`);
+  }
+  return payload;
 }
 
 function MetricCard({ eyebrow, value, detail, tone = "default" }: MetricCardProps) {
@@ -133,7 +151,7 @@ function ControlBar({
       </div>
       <div className="control-actions">
         <button className="secondary-button" type="button" onClick={onUseBundledReplay}>
-          Use Live Feed
+          Load Hosted Replay
         </button>
         <label className="upload-button">
           Load Local Replay JSON
@@ -330,19 +348,27 @@ function CaseLeaderboard({ rows }: { rows: CaseLeaderboardEntry[] }) {
 function App() {
   const [data, setData] = useState<ReplayData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [sourceLabel, setSourceLabel] = useState("Bundled replay-data.json");
+  const [sourceLabel, setSourceLabel] = useState(LIVE_REPLAY_SOURCE_LABEL);
   const [lastReloadedAt, setLastReloadedAt] = useState<string | null>(null);
 
-  const loadBundledReplay = useEffectEvent(async (source = "Bundled replay-data.json") => {
-    const response = await fetch(`/replay-data.json?ts=${Date.now()}`, { cache: "no-store" });
-    const payload: unknown = await response.json();
-    if (!isReplayData(payload)) {
-      throw new Error("Replay data shape is invalid.");
+  const loadBundledReplay = useEffectEvent(async () => {
+    let payload: ReplayData;
+    let loadedSourceLabel = LIVE_REPLAY_SOURCE_LABEL;
+
+    try {
+      payload = await loadReplayPayload(LIVE_REPLAY_FILE);
+    } catch (liveError) {
+      payload = await loadReplayPayload(DEMO_REPLAY_FILE);
+      loadedSourceLabel = DEMO_REPLAY_SOURCE_LABEL;
+      if (liveError instanceof Error) {
+        console.warn(`Falling back to ${DEMO_REPLAY_FILE}: ${liveError.message}`);
+      }
     }
+
     startTransition(() => {
       setData(payload);
       setError(null);
-      setSourceLabel(source);
+      setSourceLabel(loadedSourceLabel);
       setLastReloadedAt(new Date().toISOString());
     });
   });

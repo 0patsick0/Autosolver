@@ -32,6 +32,8 @@ powershell -ExecutionPolicy Bypass -File scripts/live_dashboard.ps1
 start_live_dashboard.cmd
 ```
 
+Cloud dashboard: `https://0patsick0.github.io/Autosolver/`
+
 ## LLM Requirement
 
 - This challenge expects an actual LLM-driven agent, so `autosolver research` now requires a configured LLM by default.
@@ -85,3 +87,5 @@ When official input and output formats arrive, only the adapter and submission w
 - `scripts/full_check.ps1` runs pytest, the end-to-end smoke flow, research-to-solve deployment validation, and a production dashboard build.
 - `scripts/live_dashboard.ps1` starts the Vite dashboard, opens the browser, and launches a live research run that streams replay updates into `dashboard/public/replay-data.json`.
 - `start_live_dashboard.cmd` is the one-click Windows launcher. You can double-click it from Explorer or run it from the repo root.
+- `.github/workflows/deploy-dashboard.yml` builds the Vite dashboard and deploys it to GitHub Pages on every push to `main`.
+- The hosted site falls back to `dashboard/public/demo-replay.json` when no live `replay-data.json` exists, so the cloud dashboard always has a replay to show.
